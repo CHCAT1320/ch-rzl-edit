@@ -28,18 +28,18 @@ jobs:
         with:
           bun-version: 1.3.13
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Resolve docs base path
         shell: bash
         run: |
           base="${{ vars.DOCS_BASE }}"
           if [[ -z "$base" ]]; then
-            repo="${GITHUB_REPOSITORY#*/}"
-            if [[ "$repo" == *.github.io ]]; then
-              base="/"
-            else
-              base="/$repo/"
-            fi
+            base="${{ steps.pages.outputs.base_path }}"
           fi
+          base="${base%/}/"
           echo "DOCS_BASE=$base" >> "$GITHUB_ENV"
 
       - name: Install dependencies
@@ -47,9 +47,6 @@ jobs:
 
       - name: Build docs
         run: bun run docs:build
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
