@@ -1,9 +1,12 @@
 import { defineConfig } from "vitepress";
 
+const base = process.env.DOCS_BASE ?? "/";
+
 export default defineConfig({
   lang: "zh-CN",
   title: "ch-rzl-edit",
   description: "Rizline 谱面编辑器的使用、开发与谱面格式文档",
+  base,
   cleanUrls: true,
   lastUpdated: true,
   markdown: {

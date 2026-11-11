@@ -48,6 +48,20 @@ bun run docs:preview
 
 文档入口：`docs/index.md`。
 
+## CI 与发布
+
+- **文档**：`.github/workflows/docs.yml` 在推送到 `main` 时构建 VitePress 并部署到 GitHub Pages。
+  - 首次使用需在仓库 **Settings → Pages → Build and deployment** 将 Source 设为 **GitHub Actions**。
+  - 项目站点会自动使用 `/<仓库名>/` 作为 base；绑定自定义域名时，可添加仓库变量 `DOCS_BASE=/` 覆盖。
+- **Release**：`.github/workflows/release.yml` 在推送 `v*` 或数字开头的 tag 时，于 `windows-latest` 构建 NSIS 安装包（`.exe`），并创建 **draft release** 上传产物。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+构建完成后到 GitHub Releases 检查草稿并手动发布。
+
 ## 目录
 
 ```text
