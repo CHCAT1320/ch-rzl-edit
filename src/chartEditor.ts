@@ -135,6 +135,7 @@ let dragging = false;
 let dragReady = false;
 let dragStartX = 0;
 let dragStartY = 0;
+let dragValueStart = 0;
 let dragSelection: Selection | null = null;
 let dragSnapshot = "";
 let selectedItems: Selection[] = [];
@@ -698,10 +699,51 @@ function toChartPoint(clientX: number, clientY: number): { x: number; time: numb
   return { x: snapX(x), time: snapTime(seconds) };
 }
 
+function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: number): { x: number; time: number } {
+  const canvas = editorCanvas;
+  if (!canvas) return { x: 0, time: currentTime() };
+  const rect = canvas.getBoundingClientRect();
+  const playfield = calculateCenterSize(rect.width, rect.height);
+  const current = currentTime();
+  const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
+  const move = chart?.canvasMoves[canvasIndex];
+  let localX = clientX - rect.left - rect.width / 2;
+  let localY = clientY - rect.top - playfield.y;
+  if (move) {
+    const rotation = editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180;
+    const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, current) * 720 * viewportScale : 0;
+    const canvasX = editorKeyPointValue(move.xPositionKeyPoints, current);
+    const pivotX = (canvasX + getEditorXOffset()) * playfield.width;
+    const pivotY = 1280 * viewportScale * 0.74;
+    const dx = localX - pivotX;
+    const dy = localY - offsetY - pivotY;
+    const cos = Math.cos(-rotation);
+    const sin = Math.sin(-rotation);
+    localX = pivotX + dx * cos - dy * sin;
+    localY = pivotY + dx * sin + dy * cos;
+  }
+  const x = localX / playfield.width - getEditorXOffset();
+  const y = localY / playfield.height;
+  const speed = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value) || 7;
+  const seconds = current + (0.74 - y) * 1280 / ((215 / 32 + speed) * 10 / 129 * 1280);
+  return { x: snapX(x), time: snapTime(seconds) };
+}
+
+function rawChartX(clientX: number): number {
+  if (!editorCanvas) return 0;
+  const rect = editorCanvas.getBoundingClientRect();
+  const playfield = calculateCenterSize(rect.width, rect.height);
+  return (clientX - rect.left - rect.width / 2) / playfield.width - getEditorXOffset();
+}
+
 function updateDraggedObject(clientX: number, clientY: number): void {
   if (!chart || !dragSelection) return;
   const selection = dragSelection;
-  const cursor = toChartPoint(clientX, clientY);
+  const cursor = selection.point
+    ? toCanvasChartPoint(clientX, clientY, selection.point.canvasIndex)
+    : selection.note && selection.line
+      ? toCanvasChartPoint(clientX, clientY, noteCanvasIndex(selection.line, selection.note.time) ?? editingCanvasIndex())
+      : toChartPoint(clientX, clientY);
 
   if (selection.point) {
     selection.point.time = cursor.time;
@@ -716,7 +758,14 @@ function updateDraggedObject(clientX: number, clientY: number): void {
     if (selection.note.type === 2 && end?.length && end[0] < selection.note.time) end[0] = selection.note.time;
     } else if (selection.item) {
       selection.item.time = cursor.time;
-      if (isKeyframeKind(selection.kind)) selection.item.value = keyframeValueFromCursor(selection.kind, cursor.x);
+      if (isKeyframeKind(selection.kind)) {
+        const delta = rawChartX(clientX) - rawChartX(dragStartX);
+        if (Math.abs(delta) >= 0.5 / Math.max(1, getVerticalDensity())) {
+          selection.item.value = keyframeValueFromCursor(selection.kind, cursor.x);
+        } else {
+          selection.item.value = dragValueStart;
+        }
+      }
     }
   notifyChange();
   refreshProperties();
@@ -749,11 +798,20 @@ function nearestLine(clientX: number, clientY: number, threshold = 14): Line | n
   const rect = editorCanvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
-  const designHeight = 1280 * Math.min(playfield.width / 720, playfield.height / 1280);
-  const screen = (x: number, tick: number): { x: number; y: number } => ({
-    x: rect.left + rect.width / 2 + (x + getEditorXOffset()) * playfield.width,
-    y: rect.top + playfield.y + getEditTimeY(beatTickToSeconds(tick), current, designHeight),
-  });
+  const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
+  const designHeight = 1280 * viewportScale;
+  const screen = (x: number, tick: number, index: number): { x: number; y: number } => {
+    const local = editorCanvasTransform(
+      {
+        x: (x + getEditorXOffset()) * playfield.width,
+        y: getEditTimeY(beatTickToSeconds(tick), current, designHeight),
+      },
+      index,
+      current,
+      viewportScale,
+    );
+    return { x: rect.left + rect.width / 2 + local.x, y: rect.top + playfield.y + local.y };
+  };
   let best: Line | null = null;
   let distance = Infinity;
   for (const line of chart.lines) {
@@ -761,13 +819,13 @@ function nearestLine(clientX: number, clientY: number, threshold = 14): Line | n
       const start = line.linePoints[index - 1];
       const end = line.linePoints[index];
       if (!segmentTouchesCanvas(start, end, canvasIndex)) continue;
-      let previous = screen(start.xPosition, start.time);
+      let previous = screen(start.xPosition, start.time, start.canvasIndex);
       for (let part = 1; part <= 16; part += 1) {
         const ratio = part / 16;
         const eased = speedEase(start.easeType, ratio);
         const x = start.xPosition + (end.xPosition - start.xPosition) * eased;
         const time = start.time + (end.time - start.time) * ratio;
-        const currentPos = screen(x, time);
+        const currentPos = screen(x, time, start.canvasIndex);
         const d = distanceToSegment(clientX, clientY, previous.x, previous.y, currentPos.x, currentPos.y);
         if (d < distance) { distance = d; best = line; }
         previous = currentPos;
@@ -790,14 +848,59 @@ function lineXAtTime(line: Line, time: number): number | null {
   return line.linePoints[line.linePoints.length - 1].xPosition;
 }
 
-function editorScreenPosition(x: number, time: number): { x: number; y: number } | null {
+function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fallback = 0): number {
+  if (!points || points.length === 0) return fallback;
+  const tick = secondsToTick(seconds);
+  if (points.length === 1 || tick <= points[0].time) return tick < points[0].time ? fallback : points[0].value;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    if (tick <= end.time) {
+      const ratio = (tick - start.time) / (end.time - start.time || 1);
+      return start.value + (end.value - start.value) * speedEase(start.easeType, ratio);
+    }
+  }
+  return points[points.length - 1].value;
+}
+
+function audioPlaying(): boolean {
+  const audio = document.querySelector<HTMLAudioElement>("#audio");
+  return !!audio && !audio.paused && !audio.ended && !audio.seeking;
+}
+
+export function editorCanvasTransform(position: { x: number; y: number }, canvasIndex: number, seconds: number, viewportScale: number): { x: number; y: number } {
+  const move = chart?.canvasMoves[canvasIndex];
+  if (!move) return position;
+  const rotation = editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180;
+  const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, seconds) * 720 * viewportScale : 0;
+  if (rotation === 0 && offsetY === 0) return position;
+  const canvasX = editorKeyPointValue(move.xPositionKeyPoints, seconds);
+  const pivotX = (canvasX + getEditorXOffset()) * 720 * viewportScale;
+  const pivotY = 1280 * viewportScale * 0.74;
+  const dx = position.x - pivotX;
+  const dy = position.y - pivotY;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: pivotX + dx * cos - dy * sin,
+    y: pivotY + dx * sin + dy * cos + offsetY,
+  };
+}
+
+function editorScreenPosition(x: number, time: number, canvasIndex?: number): { x: number; y: number } | null {
   if (!editorCanvas) return null;
   const rect = editorCanvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
+  const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
+  const local = {
+    x: (x + getEditorXOffset()) * playfield.width,
+    y: getEditTimeY(beatTickToSeconds(time), current, 1280 * viewportScale),
+  };
+  const transformed = canvasIndex === undefined ? local : editorCanvasTransform(local, canvasIndex, current, viewportScale);
   return {
-    x: rect.left + rect.width / 2 + (x + getEditorXOffset()) * playfield.width,
-    y: rect.top + playfield.y + getEditTimeY(beatTickToSeconds(time), current, 1280 * Math.min(playfield.width / 720, playfield.height / 1280)),
+    x: rect.left + rect.width / 2 + transformed.x,
+    y: rect.top + playfield.y + transformed.y,
   };
 }
 
@@ -838,7 +941,7 @@ function selectAtCursor(): void {
   for (const line of chart.lines) {
     for (const point of line.linePoints) {
       if (point.canvasIndex !== canvasIndex) continue;
-      const position = editorScreenPosition(point.xPosition, point.time);
+      const position = editorScreenPosition(point.xPosition, point.time, point.canvasIndex);
       if (!position) continue;
       const distance = Math.hypot(mouseX - position.x, mouseY - position.y);
       if (!closestPoint || distance < closestPoint.distance) closestPoint = { line, point, distance };
@@ -849,10 +952,10 @@ function selectAtCursor(): void {
       if (noteCanvas !== canvasIndex && holdCanvas !== canvasIndex) continue;
       const x = lineXAtTime(line, note.time);
       if (x === null) continue;
-      const position = editorScreenPosition(x, note.time);
+      const position = editorScreenPosition(x, note.time, noteCanvas ?? canvasIndex);
       if (!position) continue;
       if (note.type === 2 && note.otherInformations && note.otherInformations.length >= 1 && canvasRect && playfield) {
-        const tailPosition = editorScreenPosition(x, note.otherInformations[0]);
+        const tailPosition = editorScreenPosition(x, note.otherInformations[0], noteCanvas ?? canvasIndex);
         if (tailPosition) {
           const bodyRadius = 20 * playfield.height / 1280;
           if (distanceToSegment(mouseX, mouseY, position.x, position.y, tailPosition.x, tailPosition.y) <= bodyRadius) {
@@ -1309,6 +1412,7 @@ export function setupChartEditor(): void {
       dragging = false;
       dragStartX = event.clientX;
       dragStartY = event.clientY;
+      dragValueStart = selected.item?.value ?? 0;
       dragSelection = selected;
       dragSnapshot = JSON.stringify(chart);
       event.preventDefault();

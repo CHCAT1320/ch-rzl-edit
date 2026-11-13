@@ -1,5 +1,5 @@
 import { calculateCenterSize } from "./canvas";
-import { getEditorVisualState } from "./chartEditor";
+import { editorCanvasTransform, getEditorVisualState } from "./chartEditor";
 import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
 
@@ -743,10 +743,15 @@ function drawEditorObjects(
   const selectedPoints = new Set(state.selectedItems.flatMap((item) => item.point ? [item.point] : []));
   const selectedNotes = new Set(state.selectedItems.flatMap((item) => item.note ? [item.note] : []));
   context.save();
-  const editorPosition = (point: LinePoint): Point => ({
-    x: (point.xPosition + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
-    y: getEditTimeY(tickToSeconds(point.time), seconds, DESIGN_HEIGHT * viewportScale),
-  });
+  const editorPosition = (point: LinePoint): Point => editorCanvasTransform(
+    {
+      x: (point.xPosition + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
+      y: getEditTimeY(tickToSeconds(point.time), seconds, DESIGN_HEIGHT * viewportScale),
+    },
+    point.canvasIndex,
+    seconds,
+    viewportScale,
+  );
   for (const line of state.chart.lines) {
     const points = line.linePoints;
     if (!points.some((point) => point.canvasIndex === state.canvasIndex)) continue;
@@ -834,6 +839,8 @@ function drawEditorObjects(
       const noteX = lineXAtEditorTime(line, note.time);
       if (noteX === null) continue;
       const noteY = getEditTimeY(tickToSeconds(note.time), seconds, DESIGN_HEIGHT * viewportScale);
+      const headRaw = { x: (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale, y: noteY };
+      const head = editorCanvasTransform(headRaw, noteCanvas, seconds, viewportScale);
       const selectedNote = selectedNotes.has(note);
       // Keep the same base geometry as preview mode. Selection only adds a
       // highlight ring; it must not change the note's actual size.
@@ -846,41 +853,48 @@ function drawEditorObjects(
       const holdInfo = note.otherInformations;
       if (note.type === 2 && holdInfo && holdInfo.length >= 1) {
         const tailY = getEditTimeY(tickToSeconds(holdInfo[0]), seconds, DESIGN_HEIGHT * viewportScale);
-        const screenX = (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
-        const holdHeight = tailY - noteY;
-        for (let segment = 0; segment < 24; segment += 1) {
-          const startRatio = segment / 24;
-          const fade = Math.max(0, (startRatio - 36 / 63) / (27 / 63));
-          context.fillStyle = fade === 0 ? fill : `rgba(255, 255, 255, ${1 - fade})`;
-          const segmentY = noteY + holdHeight * startRatio;
-          context.fillRect(screenX - 10 * noteSize, Math.min(segmentY, segmentY + holdHeight / 24), 20 * noteSize, Math.abs(holdHeight / 24));
+        const tail = editorCanvasTransform({ x: headRaw.x, y: tailY }, noteCanvas, seconds, viewportScale);
+        const dx = tail.x - head.x;
+        const dy = tail.y - head.y;
+        const holdLength = Math.hypot(dx, dy);
+        if (holdLength > 0.0001) {
+          context.save();
+          context.translate(head.x, head.y);
+          context.rotate(Math.atan2(-dx, dy));
+          for (let segment = 0; segment < 24; segment += 1) {
+            const startRatio = segment / 24;
+            const fade = Math.max(0, (startRatio - 36 / 63) / (27 / 63));
+            context.fillStyle = fade === 0 ? fill : `rgba(255, 255, 255, ${1 - fade})`;
+            context.fillRect(-10 * noteSize, holdLength * startRatio, 20 * noteSize, holdLength / 24);
+          }
+          context.strokeStyle = "#000000";
+          context.lineWidth = Math.max(1, 5 * noteSize);
+          context.beginPath();
+          context.moveTo(-10 * noteSize, 0);
+          context.lineTo(-10 * noteSize, holdLength);
+          context.moveTo(10 * noteSize, 0);
+          context.lineTo(10 * noteSize, holdLength);
+          context.stroke();
+          context.fillStyle = "#ffffff";
+          context.beginPath();
+          context.arc(0, 0, 10 * noteSize, 0, Math.PI * 2);
+          context.fill();
+          context.strokeStyle = "#000000";
+          context.lineWidth = Math.max(1, 8 * noteSize);
+          context.stroke();
+          context.restore();
         }
-        context.strokeStyle = "#000000";
-        context.lineWidth = Math.max(1, 5 * noteSize);
-        context.beginPath();
-        context.moveTo(screenX - 10 * noteSize, noteY);
-        context.lineTo(screenX - 10 * noteSize, tailY);
-        context.moveTo(screenX + 10 * noteSize, noteY);
-        context.lineTo(screenX + 10 * noteSize, tailY);
-        context.stroke();
-        context.fillStyle = "#ffffff";
-        context.beginPath();
-        context.arc(screenX, noteY, 10 * noteSize, 0, Math.PI * 2);
-        context.fill();
-        context.strokeStyle = "#000000";
-        context.lineWidth = Math.max(1, 8 * noteSize);
-        context.stroke();
+        continue;
       }
-      const screenX = (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
       context.beginPath();
-      context.arc(screenX, noteY, radius, 0, Math.PI * 2);
+      context.arc(head.x, head.y, radius, 0, Math.PI * 2);
       context.fill();
       context.stroke();
       if (selectedNote) {
         context.strokeStyle = "#ffeb3b";
         context.lineWidth = Math.max(2, 2 * viewportScale);
         context.beginPath();
-        context.arc(screenX, noteY, radius + 5 * viewportScale, 0, Math.PI * 2);
+        context.arc(head.x, head.y, radius + 5 * viewportScale, 0, Math.PI * 2);
         context.stroke();
       }
     }
@@ -1049,9 +1063,14 @@ function drawJudgeRings(context: CanvasRenderingContext2D, line: Line, currentSe
   const startTime = tickToSeconds(start.time);
   const endTime = tickToSeconds(end.time);
   if (currentSeconds < startTime || currentSeconds > endTime) return;
-  const currentLine = rawPositionOnCurrentLine(line, currentSeconds, viewportScale, cameraScale, cameraX);
+  const ratio = (currentSeconds - startTime) / (endTime - startTime || 1);
+  const startPosition = pointPosition(start, currentSeconds, viewportScale, cameraScale, cameraX);
+  const endPosition = pointPosition(end, currentSeconds, viewportScale, cameraScale, cameraX);
   const position = cameraTransformPoint(
-    canvasTransformPoint({ x: currentLine.x, y: currentLine.y }, currentSeconds, start.canvasIndex, viewportScale, cameraScale, cameraX),
+    {
+      x: startPosition.x + (endPosition.x - startPosition.x) * ease(start.easeType, ratio),
+      y: startPosition.y + (endPosition.y - startPosition.y) * ratio,
+    },
     currentSeconds,
     viewportScale,
     cameraScale,
@@ -1100,7 +1119,7 @@ function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, sec
         y: ringY - (note.otherInformations[2] - tailCanvas.y) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale,
       },
       seconds,
-      tailCanvasIndex,
+      noteCanvas,
       viewportScale,
       cameraScale,
       cameraX,
@@ -1301,7 +1320,8 @@ export function refreshChart(): void {
 }
 
 export function resetPlaybackState(): void {
-  lastAudioTime = 0;
+  const audio = document.querySelector<HTMLAudioElement>(`#${AUDIO_ID}`);
+  lastAudioTime = audio?.src ? audio.currentTime : 0;
   hitEffects = [];
   playedNotes.clear();
 }
