@@ -30,6 +30,13 @@ export function getEditorXOffset(): number {
   return Math.max(-2, Math.min(2, Number(input?.value) || 0));
 }
 
+function verticalAxisLabel(value: number): string {
+  const mode = document.querySelector<HTMLSelectElement>("#editObjectMode")?.value ?? "lineNote";
+  if (mode === "canvasRotation" || mode === "cameraRotation") return `${(value * 360).toFixed(0)}°`;
+  if (mode === "canvasSpeed" || mode === "cameraScale") return (value * 20).toFixed(1);
+  return value.toFixed(3);
+}
+
 export function setBeatChart(value: unknown): void {
   beatChart = value as BeatChart;
 }
@@ -164,7 +171,7 @@ function drawBeatLines(
     context.lineTo(x, height);
     context.stroke();
     context.fillStyle = context.strokeStyle;
-    context.fillText(value.toFixed(3), x, 4);
+    context.fillText(verticalAxisLabel(value), x, 4);
   }
 
   // Fixed playhead for the current audio time.

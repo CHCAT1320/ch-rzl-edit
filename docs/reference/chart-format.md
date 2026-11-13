@@ -17,7 +17,9 @@
   "canvasMoves": [],
   "cameraMove": {
     "xPositionKeyPoints": [],
-    "scaleKeyPoints": []
+    "yPositionKeyPoints": [],
+    "scaleKeyPoints": [],
+    "rotationKeyPoints": []
   }
 }
 ```
@@ -55,7 +57,7 @@
 | 字段 | 说明 |
 | --- | --- |
 | `time` | tick。 |
-| `value` | 关键帧值；BPM 变化中表示倍率 `实际 BPM / 基础 BPM`。 |
+| `value` | 关键帧值；BPM 变化中表示倍率 `实际 BPM / 基础 BPM`；旋转类关键帧单位为度；Y 偏移类使用与 `xPosition` 相同的画面宽度单位。 |
 | `easeType` | 缓动类型（0–18）。 |
 | `floorPosition` | 位置缓存，由 BPM 与流速推导；导入后会被重新计算。 |
 
@@ -103,8 +105,14 @@
   "xPositionKeyPoints": [
     { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
   ],
+  "yPositionKeyPoints": [
+    { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
+  ],
   "speedKeyPoints": [
     { "time": 0, "value": 1, "easeType": 0, "floorPosition": 0 }
+  ],
+  "rotationKeyPoints": [
+    { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
   ]
 }
 ```
@@ -113,7 +121,9 @@
 | --- | --- |
 | `index` | Canvas 序号；导出时按数组顺序重写。 |
 | `xPositionKeyPoints` | Canvas 水平位移。 |
+| `yPositionKeyPoints` | Canvas 整体 Y 偏移；单位为画面宽度，正值向下。 |
 | `speedKeyPoints` | Canvas 流速；`1` 为基准速度，可为负值。 |
+| `rotationKeyPoints` | Canvas 整体旋转；单位为度，正值顺时针。 |
 
 导出时每个 Canvas 至少保留两个关键帧。
 
@@ -122,12 +132,16 @@
 ```json
 {
   "xPositionKeyPoints": [],
-  "scaleKeyPoints": []
+  "yPositionKeyPoints": [],
+  "scaleKeyPoints": [],
+  "rotationKeyPoints": []
 }
 ```
 
 - `xPositionKeyPoints`：Camera 水平位移。
+- `yPositionKeyPoints`：Camera 垂直偏移；单位为画面宽度，正值向下，不受 Camera 缩放影响。
 - `scaleKeyPoints`：Camera 缩放，`1` 为 100%。
+- `rotationKeyPoints`：Camera 旋转；单位为度，正值顺时针，围绕判定线中心旋转。
 
 ## 线对象
 
@@ -238,8 +252,14 @@
       "xPositionKeyPoints": [
         { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
       ],
+      "yPositionKeyPoints": [
+        { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
+      ],
       "speedKeyPoints": [
         { "time": 0, "value": 1, "easeType": 0, "floorPosition": 0 }
+      ],
+      "rotationKeyPoints": [
+        { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
       ]
     }
   ],
@@ -247,8 +267,14 @@
     "xPositionKeyPoints": [
       { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
     ],
+    "yPositionKeyPoints": [
+      { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
+    ],
     "scaleKeyPoints": [
       { "time": 0, "value": 1, "easeType": 0, "floorPosition": 0 }
+    ],
+    "rotationKeyPoints": [
+      { "time": 0, "value": 0, "easeType": 0, "floorPosition": 0 }
     ]
   }
 }

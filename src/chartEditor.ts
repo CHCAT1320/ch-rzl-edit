@@ -7,8 +7,8 @@ type Line = { linePoints: Point[]; notes: Note[]; judgeRingColor: ColorPoint[]; 
 type KeyPoint = { time: number; value: number; easeType?: number; floorPosition?: number };
 type Theme = { colorsList: Color[] };
 type Challenge = { start: number; end: number; transTime: number };
-type CanvasMove = { index: number; xPositionKeyPoints: KeyPoint[]; speedKeyPoints: KeyPoint[] };
-type EditorChart = { bPM?: number; bpm?: number; bpmShifts?: KeyPoint[]; themes?: Theme[]; challengeTimes?: Challenge[]; lines: Line[]; canvasMoves: CanvasMove[]; cameraMove: { xPositionKeyPoints: KeyPoint[]; scaleKeyPoints: KeyPoint[] } };
+type CanvasMove = { index: number; xPositionKeyPoints: KeyPoint[]; yPositionKeyPoints: KeyPoint[]; speedKeyPoints: KeyPoint[]; rotationKeyPoints: KeyPoint[] };
+type EditorChart = { bPM?: number; bpm?: number; bpmShifts?: KeyPoint[]; themes?: Theme[]; challengeTimes?: Challenge[]; lines: Line[]; canvasMoves: CanvasMove[]; cameraMove: { xPositionKeyPoints: KeyPoint[]; yPositionKeyPoints: KeyPoint[]; scaleKeyPoints: KeyPoint[]; rotationKeyPoints: KeyPoint[] } };
 
 export function defaultEndTick(): number {
   const audio = document.querySelector<HTMLAudioElement>("#audio");
@@ -33,11 +33,81 @@ export function createEmptyCanvasMove(index: number): CanvasMove {
   return {
     index,
     xPositionKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
+    yPositionKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
     speedKeyPoints: [defaultKeyPoint(0, 1), defaultKeyPoint(defaultEndTick(), 1)],
+    rotationKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
   };
 }
 
-type Selection = { kind: "line" | "point" | "note" | "canvasX" | "canvasSpeed" | "cameraX" | "cameraScale"; line?: Line; point?: Point; note?: Note; item?: KeyPoint };
+type KeyframeKind = "canvasX" | "canvasY" | "canvasSpeed" | "canvasRotation" | "cameraX" | "cameraY" | "cameraScale" | "cameraRotation";
+
+type Selection = { kind: "line" | "point" | "note" | KeyframeKind; line?: Line; point?: Point; note?: Note; item?: KeyPoint };
+
+function isKeyframeKind(kind: Selection["kind"]): kind is KeyframeKind {
+  return kind !== "line" && kind !== "point" && kind !== "note";
+}
+
+function keyframeKindForMode(modeName: string): KeyframeKind | null {
+  if (modeName === "canvasX" || modeName === "canvasY" || modeName === "canvasSpeed" || modeName === "canvasRotation") return modeName;
+  if (modeName === "cameraX" || modeName === "cameraY" || modeName === "cameraScale" || modeName === "cameraRotation") return modeName;
+  return null;
+}
+
+function keyframeTarget(kind: KeyframeKind): KeyPoint[] | undefined {
+  if (!chart) return undefined;
+  const canvasMove = chart.canvasMoves[editingCanvasIndex()];
+  if (kind === "canvasX") return canvasMove?.xPositionKeyPoints;
+  if (kind === "canvasY") return canvasMove?.yPositionKeyPoints;
+  if (kind === "canvasSpeed") return canvasMove?.speedKeyPoints;
+  if (kind === "canvasRotation") return canvasMove?.rotationKeyPoints;
+  if (kind === "cameraX") return chart.cameraMove.xPositionKeyPoints;
+  if (kind === "cameraY") return chart.cameraMove.yPositionKeyPoints;
+  if (kind === "cameraScale") return chart.cameraMove.scaleKeyPoints;
+  return chart.cameraMove.rotationKeyPoints;
+}
+
+function setKeyframeTarget(kind: KeyframeKind, points: KeyPoint[]): void {
+  if (!chart) return;
+  const canvasMove = chart.canvasMoves[editingCanvasIndex()];
+  if (kind === "canvasX" && canvasMove) canvasMove.xPositionKeyPoints = points;
+  if (kind === "canvasY" && canvasMove) canvasMove.yPositionKeyPoints = points;
+  if (kind === "canvasSpeed" && canvasMove) canvasMove.speedKeyPoints = points;
+  if (kind === "canvasRotation" && canvasMove) canvasMove.rotationKeyPoints = points;
+  if (kind === "cameraX") chart.cameraMove.xPositionKeyPoints = points;
+  if (kind === "cameraY") chart.cameraMove.yPositionKeyPoints = points;
+  if (kind === "cameraScale") chart.cameraMove.scaleKeyPoints = points;
+  if (kind === "cameraRotation") chart.cameraMove.rotationKeyPoints = points;
+}
+
+function keyframeDefaultValue(kind: KeyframeKind): number {
+  return kind === "canvasSpeed" || kind === "cameraScale" ? 1 : 0;
+}
+
+function keyframeRange(kind: KeyframeKind): [number, number, number] {
+  if (kind === "canvasRotation" || kind === "cameraRotation") return [-360, 360, 0];
+  if (kind === "canvasSpeed" || kind === "cameraScale") return [-10, 10, 1];
+  return [-4, 4, 0];
+}
+
+function keyframeLaneX(kind: KeyframeKind, value: number): number {
+  if (kind === "canvasRotation" || kind === "cameraRotation") return value / 360;
+  if (kind === "canvasSpeed" || kind === "cameraScale") return value / 20;
+  return value;
+}
+
+function keyframeValueFromCursor(kind: KeyframeKind, value: number): number {
+  if (kind === "canvasRotation" || kind === "cameraRotation") return value * 360;
+  if (kind === "canvasSpeed" || kind === "cameraScale") return value * 20;
+  return value;
+}
+
+function keyframeValueLabel(kind: KeyframeKind): string {
+  if (kind === "canvasRotation" || kind === "cameraRotation") return "角度 (°)";
+  if (kind === "canvasY" || kind === "cameraY") return "Y 偏移";
+  if (kind === "canvasX" || kind === "cameraX") return "X 偏移";
+  if (kind === "canvasSpeed") return "流速";
+  return "缩放";
+}
 
 export interface EditorVisualState {
   chart: EditorChart | null;
@@ -93,6 +163,22 @@ function notifyChange(): void {
 
 export function setEditorChart(value: unknown): void {
   chart = value as EditorChart;
+  if (chart) {
+    const ensure = (target: { [key: string]: unknown }, key: string, fallback: number): void => {
+      if (!Array.isArray(target[key]) || (target[key] as KeyPoint[]).length === 0) target[key] = [defaultKeyPoint(0, fallback)];
+    };
+    chart.cameraMove ??= {} as EditorChart["cameraMove"];
+    ensure(chart.cameraMove, "xPositionKeyPoints", 0);
+    ensure(chart.cameraMove, "yPositionKeyPoints", 0);
+    ensure(chart.cameraMove, "scaleKeyPoints", 1);
+    ensure(chart.cameraMove, "rotationKeyPoints", 0);
+    for (const move of chart.canvasMoves) {
+      ensure(move, "xPositionKeyPoints", 0);
+      ensure(move, "yPositionKeyPoints", 0);
+      ensure(move, "speedKeyPoints", 1);
+      ensure(move, "rotationKeyPoints", 0);
+    }
+  }
   selected = null;
   selectedItems = [];
   pasteMode = false;
@@ -112,10 +198,14 @@ export function applyMusicEndTicks(): void {
   };
   patch(chart.bpmShifts);
   patch(chart.cameraMove.xPositionKeyPoints);
+  patch(chart.cameraMove.yPositionKeyPoints);
   patch(chart.cameraMove.scaleKeyPoints);
+  patch(chart.cameraMove.rotationKeyPoints);
   for (const move of chart.canvasMoves) {
     patch(move.xPositionKeyPoints);
+    patch(move.yPositionKeyPoints);
     patch(move.speedKeyPoints);
+    patch(move.rotationKeyPoints);
   }
   for (const line of chart.lines) {
     patch(line.lineColor);
@@ -384,8 +474,9 @@ function pastePreviewAtCursor(): EditorVisualState["pastePreview"] {
   const mapX = (x: number) => snapX(pasteMirror ? clipboard!.originX - (x - clipboard!.originX) + dx : x + dx);
   const mapTime = (time: number) => Math.max(0, time + dt);
   const mapKeyValue = (value: number) => {
-    if (clipboard!.kind === "canvasSpeed" || clipboard!.kind === "cameraScale") return mapX(value / 20) * 20;
-    if (clipboard!.kind === "canvasX" || clipboard!.kind === "cameraX") return mapX(value);
+    const kind = keyframeKindForMode(clipboard!.kind);
+    if (kind === "canvasSpeed" || kind === "cameraScale") return mapX(value / 20) * 20;
+    if (kind === "canvasX" || kind === "cameraX") return mapX(value);
     return value;
   };
   return {
@@ -488,17 +579,14 @@ function applyPaste(): void {
   }
   if (pasted.length) setSelection(pasted[0], pasted.slice(1));
   if (preview.keys.length) {
-    const canvasMove = chart.canvasMoves[editingCanvasIndex()];
-    const target = preview.kind === "canvasX" ? canvasMove?.xPositionKeyPoints
-      : preview.kind === "canvasSpeed" ? canvasMove?.speedKeyPoints
-      : preview.kind === "cameraX" ? chart.cameraMove.xPositionKeyPoints
-      : chart.cameraMove.scaleKeyPoints;
-    if (target) {
+    const kind = keyframeKindForMode(preview.kind);
+    const target = kind ? keyframeTarget(kind) : undefined;
+    if (target && kind) {
       for (const item of preview.keys) {
         if (!target.some((existing) => Math.abs(existing.time - item.time) < 0.000001)) target.push(cloneKey(item));
       }
       target.sort((left, right) => left.time - right.time);
-      setSelection({ kind: preview.kind as Selection["kind"], item: target[target.length - 1] });
+      setSelection({ kind, item: target[target.length - 1] });
     }
   }
   notifyChange();
@@ -512,12 +600,9 @@ function deleteCurrentSelections(): void {
     if (item.kind === "note" && item.line && item.note) item.line.notes = item.line.notes.filter((note) => note !== item.note);
     if (item.kind === "point" && item.line && item.point) item.line.linePoints = item.line.linePoints.filter((point) => point !== item.point);
     if (item.kind === "line" && item.line) chart.lines = chart.lines.filter((line) => line !== item.line);
-    if (item.item) {
-      const canvasMove = chart.canvasMoves[editingCanvasIndex()];
-      if (item.kind === "canvasX" && canvasMove) canvasMove.xPositionKeyPoints = canvasMove.xPositionKeyPoints.filter((key) => key !== item.item);
-      if (item.kind === "canvasSpeed" && canvasMove) canvasMove.speedKeyPoints = canvasMove.speedKeyPoints.filter((key) => key !== item.item);
-      if (item.kind === "cameraX") chart.cameraMove.xPositionKeyPoints = chart.cameraMove.xPositionKeyPoints.filter((key) => key !== item.item);
-      if (item.kind === "cameraScale") chart.cameraMove.scaleKeyPoints = chart.cameraMove.scaleKeyPoints.filter((key) => key !== item.item);
+    if (item.item && isKeyframeKind(item.kind)) {
+      const target = keyframeTarget(item.kind);
+      if (target) setKeyframeTarget(item.kind, target.filter((key) => key !== item.item));
     }
   }
   selected = null;
@@ -527,7 +612,7 @@ function deleteCurrentSelections(): void {
 }
 
 function chartXOfItem(kind: Selection["kind"], value: number): number {
-  return (kind === "canvasSpeed" || kind === "cameraScale") ? value / 20 : value;
+  return isKeyframeKind(kind) ? keyframeLaneX(kind, value) : value;
 }
 
 function selectMarquee(): void {
@@ -555,16 +640,13 @@ function selectMarquee(): void {
       }
     }
   } else {
-    const canvasMove = chart.canvasMoves[editingCanvasIndex()];
-    let items: KeyPoint[] = [];
-    let kind: Selection["kind"] = "canvasX";
-    if (mode() === "canvasX") items = canvasMove?.xPositionKeyPoints ?? [];
-    if (mode() === "canvasSpeed") { items = canvasMove?.speedKeyPoints ?? []; kind = "canvasSpeed"; }
-    if (mode() === "cameraX") { items = chart.cameraMove.xPositionKeyPoints; kind = "cameraX"; }
-    if (mode() === "cameraScale") { items = chart.cameraMove.scaleKeyPoints; kind = "cameraScale"; }
-    for (const item of items) {
-      const x = chartXOfItem(kind, item.value);
-      if (x >= left && x <= right && item.time >= start && item.time <= end) hits.push({ kind, item });
+    const kind = keyframeKindForMode(mode());
+    const items = kind ? keyframeTarget(kind) ?? [] : [];
+    if (kind) {
+      for (const item of items) {
+        const x = chartXOfItem(kind, item.value);
+        if (x >= left && x <= right && item.time >= start && item.time <= end) hits.push({ kind, item });
+      }
     }
   }
   selected = hits[0] ?? null;
@@ -618,8 +700,8 @@ function toChartPoint(clientX: number, clientY: number): { x: number; time: numb
 
 function updateDraggedObject(clientX: number, clientY: number): void {
   if (!chart || !dragSelection) return;
-  const cursor = toChartPoint(clientX, clientY);
   const selection = dragSelection;
+  const cursor = toChartPoint(clientX, clientY);
 
   if (selection.point) {
     selection.point.time = cursor.time;
@@ -632,11 +714,10 @@ function updateDraggedObject(clientX: number, clientY: number): void {
     selection.note.time = Math.max(first.time, Math.min(last.time, cursor.time));
     const end = selection.note.otherInformations;
     if (selection.note.type === 2 && end?.length && end[0] < selection.note.time) end[0] = selection.note.time;
-  } else if (selection.item) {
-    selection.item.time = cursor.time;
-    if (selection.kind === "canvasX" || selection.kind === "cameraX") selection.item.value = cursor.x;
-    if (selection.kind === "canvasSpeed" || selection.kind === "cameraScale") selection.item.value = cursor.x * 20;
-  }
+    } else if (selection.item) {
+      selection.item.time = cursor.time;
+      if (isKeyframeKind(selection.kind)) selection.item.value = keyframeValueFromCursor(selection.kind, cursor.x);
+    }
   notifyChange();
   refreshProperties();
 }
@@ -723,19 +804,19 @@ function editorScreenPosition(x: number, time: number): { x: number; y: number }
 function selectAtCursor(): void {
   if (!chart) return;
   if (mode() !== "lineNote") {
-    const canvasMove = chart.canvasMoves[editingCanvasIndex()];
-    let items: KeyPoint[] = [];
-    let kind: Selection["kind"] = "canvasX";
-    if (mode() === "canvasX") items = canvasMove?.xPositionKeyPoints ?? [];
-    if (mode() === "canvasSpeed") { items = canvasMove?.speedKeyPoints ?? []; kind = "canvasSpeed"; }
-    if (mode() === "cameraX") { items = chart.cameraMove.xPositionKeyPoints; kind = "cameraX"; }
-    if (mode() === "cameraScale") { items = chart.cameraMove.scaleKeyPoints; kind = "cameraScale"; }
+    const kind = keyframeKindForMode(mode());
+    const items = kind ? keyframeTarget(kind) ?? [] : [];
+    if (!kind) {
+      setSingleSelection(null);
+      refreshProperties();
+      return;
+    }
     const rect = editorCanvas?.getBoundingClientRect();
     const playfield = rect ? calculateCenterSize(rect.width, rect.height) : null;
     const current = currentTime();
     const item = items.reduce<{ value: KeyPoint; distance: number } | null>((best, value) => {
       if (!playfield || !rect) return best;
-      const xValue = (kind === "canvasSpeed" || kind === "cameraScale") ? value.value / 20 : value.value;
+      const xValue = keyframeLaneX(kind, value.value);
       const x = rect.left + rect.width / 2 + (xValue + getEditorXOffset()) * playfield.width;
       const y = rect.top + playfield.y + getEditTimeY(beatTickToSeconds(value.time), current, 1280 * Math.min(playfield.width / 720, playfield.height / 1280));
       const distance = Math.hypot(mouseX - x, mouseY - y);
@@ -773,11 +854,8 @@ function selectAtCursor(): void {
       if (note.type === 2 && note.otherInformations && note.otherInformations.length >= 1 && canvasRect && playfield) {
         const tailPosition = editorScreenPosition(x, note.otherInformations[0]);
         if (tailPosition) {
-          const bodyLeft = position.x - 20 * playfield.height / 1280;
-          const bodyRight = position.x + 20 * playfield.height / 1280;
-          const bodyTop = Math.min(position.y, tailPosition.y);
-          const bodyBottom = Math.max(position.y, tailPosition.y);
-          if (mouseX >= bodyLeft && mouseX <= bodyRight && mouseY >= bodyTop && mouseY <= bodyBottom) {
+          const bodyRadius = 20 * playfield.height / 1280;
+          if (distanceToSegment(mouseX, mouseY, position.x, position.y, tailPosition.x, tailPosition.y) <= bodyRadius) {
             holdBodyHit = { line, note };
           }
         }
@@ -851,15 +929,13 @@ function createNote(type: number): void {
 function createKeyPoint(): void {
   if (!chart) return;
   const cursor = toChartPoint(mouseX, mouseY);
-  const canvasMove = chart.canvasMoves[editingCanvasIndex()];
-  let target: KeyPoint[] | null = null;
-  let kind: Selection["kind"] = "canvasX";
-  let value = cursor.x;
-  if (mode() === "canvasX" && canvasMove) target = canvasMove.xPositionKeyPoints;
-  if (mode() === "canvasSpeed" && canvasMove) { target = canvasMove.speedKeyPoints; kind = "canvasSpeed"; value = 1; }
-  if (mode() === "cameraX") { target = chart.cameraMove.xPositionKeyPoints; kind = "cameraX"; }
-  if (mode() === "cameraScale") { target = chart.cameraMove.scaleKeyPoints; kind = "cameraScale"; value = 1; }
-  if (!target) return;
+  const kind = keyframeKindForMode(mode());
+  const target = kind ? keyframeTarget(kind) : undefined;
+  if (!kind || !target) return;
+  let value = keyframeDefaultValue(kind);
+  if (kind === "canvasX" || kind === "canvasY" || kind === "cameraX" || kind === "cameraY" || kind === "canvasRotation" || kind === "cameraRotation") {
+    value = keyframeValueFromCursor(kind, cursor.x);
+  }
   const existing = target.find((item) => Math.abs(item.time - cursor.time) < 0.000001);
   if (existing) {
     setSingleSelection({ kind, item: existing });
@@ -996,9 +1072,13 @@ function selectedObjectLabel(): string {
     return "Tap";
   }
   if (selected.kind === "canvasX") return "Canvas X 关键帧";
+  if (selected.kind === "canvasY") return "Canvas Y 关键帧";
   if (selected.kind === "canvasSpeed") return "Canvas 速度关键帧";
+  if (selected.kind === "canvasRotation") return "Canvas 旋转关键帧";
   if (selected.kind === "cameraX") return "Camera X 关键帧";
+  if (selected.kind === "cameraY") return "Camera Y 关键帧";
   if (selected.kind === "cameraScale") return "Camera Scale 关键帧";
+  if (selected.kind === "cameraRotation") return "Camera 旋转关键帧";
   return "对象";
 }
 
@@ -1045,7 +1125,8 @@ function refreshObjectForm(): void {
       fields.push(["结束 tick", "holdEnd", info[0] ?? selected.note.time], ["结束 Canvas", "holdCanvas", info[1] ?? 0]);
     }
   } else if (selected.item) {
-    fields.push(["时间 tick", "time", selected.item.time], ["值", "value", selected.item.value]);
+    const valueLabel = isKeyframeKind(selected.kind) ? keyframeValueLabel(selected.kind) : "值";
+    fields.push(["时间 tick", "time", selected.item.time], [valueLabel, "value", selected.item.value]);
     if (selected.kind !== "canvasSpeed") fields.push(["缓动", "easeType", selected.item.easeType ?? 0]);
   } else if (selected.line) {
     const summary = document.createElement("div");
@@ -1086,7 +1167,7 @@ function refreshObjectForm(): void {
       else if (key === "type") Object.assign(target, { type: readClamped(input, 0, 2, 0) });
       else if (key === "value") {
         const kind = selected?.kind;
-        const range = kind === "canvasSpeed" || kind === "cameraScale" ? [-10, 10, 1] : [-4, 4, 0];
+        const range = kind && isKeyframeKind(kind) ? keyframeRange(kind) : [-4, 4, 0];
         Object.assign(target, { value: readClamped(input, range[0], range[1], range[2]) });
       }
       notifyChange();

@@ -1,6 +1,6 @@
 # ch-rzl-edit
 
-Rizline 谱面编辑器。支持线节点、Tap / Drag / Hold、Canvas 与 Camera 关键帧、BPM、Riztime 主题、线条/判定圈颜色和实时预览。
+Rizline 谱面编辑器。支持线节点、Tap / Drag / Hold、Canvas 与 Camera 的 X/Y/缩放/旋转关键帧、BPM、Riztime 主题、线条/判定圈颜色和实时预览。
 
 ## 技术栈
 
@@ -32,7 +32,7 @@ bun run tauri build
 1. 导入音乐，或点击「新建谱面」并选择音乐。
 2. 在 BPM 面板设置基础 BPM 与 BPM 变化。
 3. 在 `line&note` 模式下用 `R` 添加线节点，`Q` / `W` / `E` 添加 Tap / Drag / Hold。
-4. 切换编辑对象模式，编辑 Canvas / Camera 关键帧、Riztime、线颜色与判定圈颜色。
+4. 切换编辑对象模式，编辑 Canvas / Camera 的 X、Y、缩放、旋转关键帧，以及 Riztime、线颜色与判定圈颜色。
 5. 按住 `T` 预览，松开恢复；`U` 切换编辑叠加层。
 6. 导出谱面 JSON。
 

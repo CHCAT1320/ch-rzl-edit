@@ -48,7 +48,9 @@ interface Line {
 
 interface CanvasMove {
   xPositionKeyPoints: KeyPoint[];
+  yPositionKeyPoints?: KeyPoint[];
   speedKeyPoints: KeyPoint[];
+  rotationKeyPoints?: KeyPoint[];
 }
 
 interface Theme {
@@ -73,6 +75,8 @@ interface Chart {
   cameraMove: {
     scaleKeyPoints: KeyPoint[];
     xPositionKeyPoints: KeyPoint[];
+    yPositionKeyPoints?: KeyPoint[];
+    rotationKeyPoints?: KeyPoint[];
   };
 }
 
@@ -122,6 +126,7 @@ let renderSurfaceHeight = DESIGN_HEIGHT;
 
 interface HitEffect {
   x: number;
+  y: number;
   timer: number;
   angles: number[];
   sizes: number[];
@@ -414,9 +419,13 @@ function sortChartData(): void {
   chart.bpmShifts.sort(byTime);
   chart.cameraMove.scaleKeyPoints.sort(byTime);
   chart.cameraMove.xPositionKeyPoints.sort(byTime);
+  chart.cameraMove.yPositionKeyPoints?.sort(byTime);
+  chart.cameraMove.rotationKeyPoints?.sort(byTime);
   for (const move of chart.canvasMoves) {
     move.xPositionKeyPoints.sort(byTime);
+    move.yPositionKeyPoints?.sort(byTime);
     move.speedKeyPoints.sort(byTime);
+    move.rotationKeyPoints?.sort(byTime);
   }
   for (const line of chart.lines) {
     line.linePoints.sort(byTime);
@@ -453,15 +462,15 @@ function lineSegment(points: LinePoint[], seconds: number): [LinePoint, LinePoin
   return [start, start];
 }
 
-function positionOnCurrentLine(line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
+function rawPositionOnCurrentLine(line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
   const segment = lineSegment(line.linePoints, seconds);
   if (!segment) return { x: 0, y: 0 };
   const [start, end] = segment;
   const startTime = tickToSeconds(start.time);
   const endTime = tickToSeconds(end.time);
   const ratio = (seconds - startTime) / (endTime - startTime || 1);
-  const startPosition = pointPosition(start, seconds, viewportScale, cameraScale, cameraX);
-  const endPosition = pointPosition(end, seconds, viewportScale, cameraScale, cameraX);
+  const startPosition = rawPointPosition(start, seconds, viewportScale, cameraScale, cameraX);
+  const endPosition = rawPointPosition(end, seconds, viewportScale, cameraScale, cameraX);
   return {
     x: startPosition.x + (endPosition.x - startPosition.x) * ease(start.easeType, ratio),
     y: startPosition.y + (endPosition.y - startPosition.y) * ratio,
@@ -480,12 +489,84 @@ function renderMetrics(viewportScale: number): { width: number; height: number; 
   };
 }
 
-function pointPosition(point: LinePoint, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
+function rawPointPosition(point: LinePoint, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
   const canvas = canvasPosition(seconds, point.canvasIndex);
   const metrics = renderMetrics(viewportScale);
   return {
     x: (point.xPosition + canvas.x + cameraX) * cameraScale * metrics.width,
     y: metrics.ringY - (number(point.floorPosition) - canvas.y) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale,
+  };
+}
+
+function canvasYOffset(seconds: number, index: number): number {
+  const move = chart?.canvasMoves[index];
+  return keyPointValue(seconds, move?.yPositionKeyPoints ?? [], 0);
+}
+
+function canvasRotation(seconds: number, index: number): number {
+  const move = chart?.canvasMoves[index];
+  return keyPointValue(seconds, move?.rotationKeyPoints ?? [], 0) * Math.PI / 180;
+}
+
+function canvasTransformPoint(position: Point, seconds: number, index: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
+  const canvas = canvasPosition(seconds, index);
+  const metrics = renderMetrics(viewportScale);
+  const rotation = canvasRotation(seconds, index);
+  const offsetY = canvasYOffset(seconds, index) * metrics.width * cameraScale;
+  if (rotation === 0 && offsetY === 0) return position;
+  const pivotX = (canvas.x + cameraX) * cameraScale * metrics.width;
+  const pivotY = metrics.ringY;
+  const dx = position.x - pivotX;
+  const dy = position.y - pivotY;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: pivotX + dx * cos - dy * sin,
+    y: pivotY + dx * sin + dy * cos + offsetY,
+  };
+}
+
+function pointPosition(point: LinePoint, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point {
+  return canvasTransformPoint(
+    rawPointPosition(point, seconds, viewportScale, cameraScale, cameraX),
+    seconds,
+    point.canvasIndex,
+    viewportScale,
+    cameraScale,
+    cameraX,
+  );
+}
+
+function cameraYOffset(seconds: number, viewportScale: number): number {
+  return keyPointValue(seconds, chart?.cameraMove.yPositionKeyPoints ?? [], 0) * renderMetrics(viewportScale).width;
+}
+
+function cameraRotationRadians(seconds: number): number {
+  return keyPointValue(seconds, chart?.cameraMove.rotationKeyPoints ?? [], 0) * Math.PI / 180;
+}
+
+function applyCameraTransform(context: CanvasRenderingContext2D, seconds: number, viewportScale: number, _cameraScale: number): void {
+  const metrics = renderMetrics(viewportScale);
+  const offsetY = cameraYOffset(seconds, viewportScale);
+  const rotation = cameraRotationRadians(seconds);
+  if (offsetY === 0 && rotation === 0) return;
+  context.translate(0, offsetY);
+  context.translate(0, metrics.ringY);
+  context.rotate(rotation);
+  context.translate(0, -metrics.ringY);
+}
+
+function cameraTransformPoint(position: Point, seconds: number, viewportScale: number, _cameraScale: number): Point {
+  const metrics = renderMetrics(viewportScale);
+  const offsetY = cameraYOffset(seconds, viewportScale);
+  const rotation = cameraRotationRadians(seconds);
+  if (offsetY === 0 && rotation === 0) return position;
+  const dy = position.y - metrics.ringY;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return {
+    x: position.x * cos - dy * sin,
+    y: metrics.ringY + position.x * sin + dy * cos + offsetY,
   };
 }
 
@@ -498,16 +579,33 @@ function speedRatio(): number {
   return (215 / 32 + getChartSpeed()) * (10 / 129);
 }
 
-function noteX(line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): number {
+function noteRawGeometry(line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): { raw: Point; canvasIndex: number } | null {
   const segment = lineSegment(line.linePoints, tickToSeconds(note.time));
-  if (!segment) return 0;
+  if (!segment) return null;
   const [start, end] = segment;
   const startTime = tickToSeconds(start.time);
   const endTime = tickToSeconds(end.time);
   const ratio = (tickToSeconds(note.time) - startTime) / (endTime - startTime || 1);
-  const p0 = pointPosition(start, seconds, viewportScale, cameraScale, cameraX);
-  const p1 = pointPosition(end, seconds, viewportScale, cameraScale, cameraX);
-  return p0.x + (p1.x - p0.x) * ease(start.easeType, ratio);
+  const rawStart = rawPointPosition(start, seconds, viewportScale, cameraScale, cameraX);
+  const rawEnd = rawPointPosition(end, seconds, viewportScale, cameraScale, cameraX);
+  return {
+    raw: {
+      x: rawStart.x + (rawEnd.x - rawStart.x) * ease(start.easeType, ratio),
+      y: rawStart.y - (number(note.floorPosition, number(start.floorPosition)) - number(start.floorPosition)) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale,
+    },
+    canvasIndex: start.canvasIndex,
+  };
+}
+
+function noteScreenPosition(line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): Point | null {
+  const geometry = noteRawGeometry(line, note, seconds, viewportScale, cameraScale, cameraX);
+  if (!geometry) return null;
+  return cameraTransformPoint(
+    canvasTransformPoint(geometry.raw, seconds, geometry.canvasIndex, viewportScale, cameraScale, cameraX),
+    seconds,
+    viewportScale,
+    cameraScale,
+  );
 }
 
 function spawnHitEffects(currentSeconds: number, previousSeconds: number, viewportScale: number, cameraScale: number, cameraX: number): void {
@@ -523,10 +621,12 @@ function spawnHitEffects(currentSeconds: number, previousSeconds: number, viewpo
       const hitTime = tickToSeconds(note.time);
       if (playedNotes.has(noteId) || hitTime < previousSeconds || hitTime > currentSeconds) return;
       playedNotes.add(noteId);
-      const x = noteX(line, note, currentSeconds, viewportScale, cameraScale, cameraX);
+      const position = noteScreenPosition(line, note, hitTime, viewportScale, cameraScale, cameraX);
+      if (!position) return;
       const count = 3 + Math.floor(Math.random() * 3);
       hitEffects.push({
-        x,
+        x: position.x,
+        y: position.y,
         timer: currentSeconds,
         angles: Array.from({ length: count }, () => Math.random() * Math.PI * 2),
         sizes: Array.from({ length: count }, () => 10 + Math.random() * 20),
@@ -541,7 +641,6 @@ function spawnHitEffects(currentSeconds: number, previousSeconds: number, viewpo
 
 function drawHitEffects(context: CanvasRenderingContext2D, currentSeconds: number, viewportScale: number, cameraScale: number, effectColor: ChartColor, challenge: boolean): void {
   const scale = cameraScale * viewportScale;
-  const ringY = renderMetrics(viewportScale).ringY;
   for (const effect of hitEffects) {
     const progress = Math.max(0, Math.min(1, (currentSeconds - effect.timer) / 0.5));
     const easeValue = ease(11, progress);
@@ -549,13 +648,13 @@ function drawHitEffects(context: CanvasRenderingContext2D, currentSeconds: numbe
     context.strokeStyle = color(effectColor, { r: 255, g: 255, b: 255, a: 255 });
     context.lineWidth = Math.max(0.1, (30 - 30 * easeValue) * scale * 2);
     context.beginPath();
-    context.arc(effect.x, ringY, radius, 0, Math.PI * 2);
+    context.arc(effect.x, effect.y, radius, 0, Math.PI * 2);
     context.stroke();
     effect.angles.forEach((angle, index) => {
       const size = effect.sizes[index] * scale * 2;
       const distance = ease(11, progress) * 100 * scale * 2;
       const x = effect.x + Math.cos(angle) * distance;
-      const y = ringY + Math.sin(angle) * distance;
+      const y = effect.y + Math.sin(angle) * distance;
       const particleRadius = size * (1 - ease(10, progress)) * 0.5;
       if (particleRadius <= 0) return;
       context.fillStyle = color({ ...effectColor, a: 255 * (1 - ease(10, progress)) });
@@ -563,7 +662,7 @@ function drawHitEffects(context: CanvasRenderingContext2D, currentSeconds: numbe
       context.arc(x, y, particleRadius, 0, Math.PI * 2);
       context.fill();
       if (challenge) {
-        const challengeY = ringY - ease(11, progress) * effect.challengeOffsets[index] * scale * 2;
+        const challengeY = effect.y - ease(11, progress) * effect.challengeOffsets[index] * scale * 2;
         const challengeRadius = effect.challengeSizes[index] * scale * 2 * (1 - ease(10, progress)) * 0.5;
         context.beginPath();
         context.arc(effect.x, challengeY, challengeRadius, 0, Math.PI * 2);
@@ -582,6 +681,8 @@ function drawScene(
   themeIndex: number,
 ): void {
   const noteColor = color(themeColor(themeIndex, 1, { r: 255, g: 255, b: 255, a: 255 }));
+  context.save();
+  applyCameraTransform(context, currentSeconds, viewportScale, cameraScale);
   for (const line of chart?.lines ?? []) {
     drawLine(context, line, currentSeconds, viewportScale, cameraScale, cameraX);
   }
@@ -590,17 +691,7 @@ function drawScene(
       drawNote(context, line, note, currentSeconds, viewportScale, cameraScale, cameraX, noteColor);
     }
   }
-  for (const line of chart?.lines ?? []) {
-    drawJudgeRings(context, line, currentSeconds, viewportScale, cameraScale, cameraX);
-  }
-  drawHitEffects(
-    context,
-    currentSeconds,
-    viewportScale,
-    cameraScale,
-    themeColor(themeIndex, 2, { r: 255, g: 255, b: 255, a: 255 }),
-    themeIndex > 0,
-  );
+  context.restore();
 }
 
 function drawCanvasIndexes(
@@ -628,9 +719,14 @@ function drawCanvasIndexes(
   chart.canvasMoves.forEach((_, index) => {
     const canvas = canvasPosition(seconds, index);
     const x = (canvas.x + cameraX) * DESIGN_WIDTH * cameraScale * viewportScale;
-    const y = Math.max(minY, Math.min(maxY, maxY - index * rowGap));
-    context.strokeText(String(index), x, y);
-    context.fillText(String(index), x, y);
+    const baseY = Math.max(minY, Math.min(maxY, maxY - index * rowGap));
+    const y = baseY + canvasYOffset(seconds, index) * metrics.width * cameraScale;
+    context.save();
+    context.translate(x, y);
+    context.rotate(canvasRotation(seconds, index));
+    context.strokeText(String(index), 0, 0);
+    context.fillText(String(index), 0, 0);
+    context.restore();
   });
   context.restore();
 }
@@ -814,8 +910,10 @@ function drawEditorKeyFrames(
   const state = getEditorVisualState();
   if (!isEditMode() || state.mode === "lineNote" || !state.chart) return;
   const selectedKeys = new Set(state.selectedItems.flatMap((item) => item.item ? [item.item] : []));
+  const isRotationMode = state.mode === "canvasRotation" || state.mode === "cameraRotation";
+  const isScaledMode = state.mode === "canvasSpeed" || state.mode === "cameraScale";
   const keyframeX = (item: { value: number }): number => {
-    const xValue = (state.mode === "canvasSpeed" || state.mode === "cameraScale") ? item.value / 20 : item.value;
+    const xValue = isRotationMode ? item.value / 360 : isScaledMode ? item.value / 20 : item.value;
     return (xValue + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
   };
   const renderPoint = (item: { time: number; value: number }, selected: boolean): void => {
@@ -831,8 +929,13 @@ function drawEditorKeyFrames(
   };
   const canvasMove = state.chart.canvasMoves[state.canvasIndex];
   const points = state.mode === "canvasX" ? canvasMove?.xPositionKeyPoints ?? [] :
+    state.mode === "canvasY" ? canvasMove?.yPositionKeyPoints ?? [] :
     state.mode === "canvasSpeed" ? canvasMove?.speedKeyPoints ?? [] :
-    state.mode === "cameraX" ? state.chart.cameraMove.xPositionKeyPoints : state.chart.cameraMove.scaleKeyPoints;
+    state.mode === "canvasRotation" ? canvasMove?.rotationKeyPoints ?? [] :
+    state.mode === "cameraX" ? state.chart.cameraMove.xPositionKeyPoints :
+    state.mode === "cameraY" ? state.chart.cameraMove.yPositionKeyPoints ?? [] :
+    state.mode === "cameraScale" ? state.chart.cameraMove.scaleKeyPoints :
+    state.mode === "cameraRotation" ? state.chart.cameraMove.rotationKeyPoints ?? [] : [];
   const pointPosition = (item: { time: number; value: number }): Point => ({
     x: keyframeX(item),
     y: getEditTimeY(tickToSeconds(item.time), seconds, DESIGN_HEIGHT * viewportScale),
@@ -891,7 +994,12 @@ function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number
     const end = line.linePoints[index + 1];
     const p0 = pointPosition(start, seconds, viewportScale, cameraScale, cameraX);
     const p1 = pointPosition(end, seconds, viewportScale, cameraScale, cameraX);
-    if (!segmentIntersectsScreen(p0, p1, renderSurfaceWidth, renderSurfaceHeight)) continue;
+    if (!segmentIntersectsScreen(
+      cameraTransformPoint(p0, seconds, viewportScale, cameraScale),
+      cameraTransformPoint(p1, seconds, viewportScale, cameraScale),
+      renderSurfaceWidth,
+      renderSurfaceHeight,
+    )) continue;
     const startColor = pointColors[index];
     const endColor = pointColors[index + 1];
     const dx = p1.x - p0.x;
@@ -941,102 +1049,124 @@ function drawJudgeRings(context: CanvasRenderingContext2D, line: Line, currentSe
   const startTime = tickToSeconds(start.time);
   const endTime = tickToSeconds(end.time);
   if (currentSeconds < startTime || currentSeconds > endTime) return;
-  const p0 = pointPosition(start, currentSeconds, viewportScale, cameraScale, cameraX);
-  const p1 = pointPosition(end, currentSeconds, viewportScale, cameraScale, cameraX);
-  const designFloor = renderMetrics(viewportScale).ringY;
-  const y0 = p0.y;
-  const y1 = p1.y;
-  const floorRatio = Math.abs(y1 - y0) > 1e-9
-    ? Math.max(0, Math.min(1, (designFloor - y0) / (y1 - y0)))
-    : 0.5;
-  const x = p0.x + (p1.x - p0.x) * ease(start.easeType, floorRatio);
-  if (x < -renderSurfaceWidth / 2 - 60 || x > renderSurfaceWidth / 2 + 60) return;
+  const currentLine = rawPositionOnCurrentLine(line, currentSeconds, viewportScale, cameraScale, cameraX);
+  const position = cameraTransformPoint(
+    canvasTransformPoint({ x: currentLine.x, y: currentLine.y }, currentSeconds, start.canvasIndex, viewportScale, cameraScale, cameraX),
+    currentSeconds,
+    viewportScale,
+    cameraScale,
+  );
+  const x = position.x;
+  const judgeY = position.y;
+  const ringRadius = Math.max(1, 30 * cameraScale * viewportScale);
+  if (
+    x + ringRadius < -renderSurfaceWidth / 2 ||
+    x - ringRadius > renderSurfaceWidth / 2 ||
+    judgeY + ringRadius < 0 ||
+    judgeY - ringRadius > renderSurfaceHeight
+  ) return;
   const ringColor = currentColor(currentSeconds, line.judgeRingColor);
   if (!ringColor) return;
   context.strokeStyle = color(ringColor);
   context.lineWidth = Math.max(1, 6 * cameraScale * viewportScale);
   context.beginPath();
-  context.arc(x, designFloor, Math.max(1, 30 * cameraScale * viewportScale), 0, Math.PI * 2);
+  context.arc(x, judgeY, ringRadius, 0, Math.PI * 2);
   context.stroke();
 }
 
 function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, noteColor: string): void {
   if (note.type !== 2 && seconds > tickToSeconds(note.time)) return;
-  const segment = lineSegment(line.linePoints, tickToSeconds(note.time));
-  if (!segment) return;
-  const [start, end] = segment;
-  const startTime = tickToSeconds(start.time);
-  const endTime = tickToSeconds(end.time);
-  const ratio = (tickToSeconds(note.time) - startTime) / (endTime - startTime || 1);
-  const startPosition = pointPosition(start, seconds, viewportScale, cameraScale, cameraX);
-  const endPosition = pointPosition(end, seconds, viewportScale, cameraScale, cameraX);
-  const position = {
-    x: startPosition.x + (endPosition.x - startPosition.x) * ease(start.easeType, ratio),
-    y: pointPosition(start, seconds, viewportScale, cameraScale, cameraX).y -
-      (number(note.floorPosition, number(start.floorPosition)) - number(start.floorPosition)) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale,
-  };
-  if (note.type !== 2 && (position.x < -renderSurfaceWidth / 2 - 60 || position.x > renderSurfaceWidth / 2 + 60 || position.y < -60 || position.y > renderSurfaceHeight + 60)) return;
-    const noteSize = cameraScale * viewportScale * 2;
+  const geometry = noteRawGeometry(line, note, seconds, viewportScale, cameraScale, cameraX);
+  if (!geometry) return;
+  const rawPosition = geometry.raw;
+  const noteCanvas = geometry.canvasIndex;
+  const position = canvasTransformPoint(rawPosition, seconds, noteCanvas, viewportScale, cameraScale, cameraX);
+  const cullPosition = cameraTransformPoint(position, seconds, viewportScale, cameraScale);
+  if (note.type !== 2 && (cullPosition.x < -renderSurfaceWidth / 2 - 60 || cullPosition.x > renderSurfaceWidth / 2 + 60 || cullPosition.y < -60 || cullPosition.y > renderSurfaceHeight + 60)) return;
+  const noteSize = cameraScale * viewportScale * 2;
   if (note.type === 2 && note.otherInformations && note.otherInformations.length >= 3) {
     const holdEndSeconds = tickToSeconds(note.otherInformations[0]);
     if (seconds - holdEndSeconds > 0.2) return;
-    const tailCanvas = canvasPosition(seconds, Math.trunc(note.otherInformations[1]));
+    const tailCanvasIndex = Math.trunc(note.otherInformations[1]);
+    const tailCanvas = canvasPosition(seconds, tailCanvasIndex);
     const ringY = renderMetrics(viewportScale).ringY;
-    const tailY = ringY - (note.otherInformations[2] - tailCanvas.y) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale;
-    const headPosition = seconds > tickToSeconds(note.time)
-      ? positionOnCurrentLine(line, seconds, viewportScale, cameraScale, cameraX)
-      : position;
-    const x = headPosition.x;
-    const y = seconds > tickToSeconds(note.time) ? ringY : position.y;
-    if (Math.max(y, tailY) < -60 || Math.min(y, tailY) > renderSurfaceHeight + 60 || x < -renderSurfaceWidth / 2 - 60 || x > renderSurfaceWidth / 2 + 60) return;
+    const headRaw = seconds > tickToSeconds(note.time)
+      ? { x: rawPositionOnCurrentLine(line, seconds, viewportScale, cameraScale, cameraX).x, y: ringY }
+      : rawPosition;
+    const head = canvasTransformPoint(headRaw, seconds, noteCanvas, viewportScale, cameraScale, cameraX);
+    const tail = canvasTransformPoint(
+      {
+        x: headRaw.x,
+        y: ringY - (note.otherInformations[2] - tailCanvas.y) * cameraScale * speedRatio() * DESIGN_HEIGHT * viewportScale,
+      },
+      seconds,
+      tailCanvasIndex,
+      viewportScale,
+      cameraScale,
+      cameraX,
+    );
+    const cullHead = cameraTransformPoint(head, seconds, viewportScale, cameraScale);
+    const cullTail = cameraTransformPoint(tail, seconds, viewportScale, cameraScale);
+    if (
+      Math.max(cullHead.y, cullTail.y) + noteSize < -60 ||
+      Math.min(cullHead.y, cullTail.y) - noteSize > renderSurfaceHeight + 60 ||
+      Math.min(cullHead.x, cullTail.x) - noteSize > renderSurfaceWidth / 2 + 60 ||
+      Math.max(cullHead.x, cullTail.x) + noteSize < -renderSurfaceWidth / 2 - 60
+    ) return;
     if (seconds > holdEndSeconds) {
       const progress = Math.max(0, 1 - ((seconds - holdEndSeconds) / 0.2) ** 3);
       context.beginPath();
-      context.arc(x, y, 10 * noteSize * progress, 0, Math.PI * 2);
+      context.arc(head.x, head.y, 10 * noteSize * progress, 0, Math.PI * 2);
       context.strokeStyle = "#000000";
       context.lineWidth = Math.max(1, 3 * noteSize);
       context.stroke();
       context.fillStyle = "#ffffff";
       context.beginPath();
-      context.arc(x, y, 8 * noteSize * progress, 0, Math.PI * 2);
+      context.arc(head.x, head.y, 8 * noteSize * progress, 0, Math.PI * 2);
       context.fill();
       context.strokeStyle = "#000000";
       context.lineWidth = Math.max(1, 3 * noteSize);
       context.stroke();
       return;
     }
+    const dx = tail.x - head.x;
+    const dy = tail.y - head.y;
+    const holdLength = Math.hypot(dx, dy);
+    if (holdLength <= 0.0001) return;
+    const angle = Math.atan2(-dx, dy);
+    const noteRgb = noteColor.match(/rgba?\(([^)]+)\)/)?.[1].split(",").map(Number) ?? [255, 255, 255, 1];
+    context.save();
+    context.translate(head.x, head.y);
+    context.rotate(angle);
     const segments = 24;
-    const holdHeight = tailY - y;
     for (let index = 0; index < segments; index += 1) {
       const startRatio = index / segments;
       const endRatio = (index + 1) / segments;
       const midRatio = (startRatio + endRatio) / 2;
       const fade = midRatio <= 36 / 63 ? 0 : Math.min(1, (midRatio - 36 / 63) / (27 / 63));
-      const noteRgb = noteColor.match(/rgba?\(([^)]+)\)/)?.[1].split(",").map(Number) ?? [255, 255, 255, 1];
       const red = noteRgb[0] + (255 - noteRgb[0]) * fade;
       const green = noteRgb[1] + (255 - noteRgb[1]) * fade;
       const blue = noteRgb[2] + (255 - noteRgb[2]) * fade;
       context.fillStyle = `rgba(${red}, ${green}, ${blue}, ${(noteRgb[3] ?? 1) * (1 - fade)})`;
-      const segmentY = y + holdHeight * startRatio;
-      const segmentHeight = holdHeight * (endRatio - startRatio);
-      context.fillRect(x - 10 * noteSize, Math.min(segmentY, segmentY + segmentHeight), 20 * noteSize, Math.abs(segmentHeight));
+      context.fillRect(-10 * noteSize, holdLength * startRatio, 20 * noteSize, holdLength * (endRatio - startRatio));
     }
     context.strokeStyle = "#000000";
     context.lineWidth = Math.max(1, 5 * noteSize);
-    context.beginPath();
     const holdSize = 10 * noteSize;
-    context.moveTo(x - holdSize, y);
-    context.lineTo(x - holdSize, tailY);
-    context.moveTo(x + holdSize, y);
-    context.lineTo(x + holdSize, tailY);
+    context.beginPath();
+    context.moveTo(-holdSize, 0);
+    context.lineTo(-holdSize, holdLength);
+    context.moveTo(holdSize, 0);
+    context.lineTo(holdSize, holdLength);
     context.stroke();
     context.fillStyle = "#ffffff";
     context.beginPath();
-    context.arc(x, y, 10 * noteSize, 0, Math.PI * 2);
+    context.arc(0, 0, 10 * noteSize, 0, Math.PI * 2);
     context.fill();
     context.strokeStyle = "#000000";
     context.lineWidth = Math.max(1, 8 * noteSize);
     context.stroke();
+    context.restore();
     return;
   }
 
@@ -1260,6 +1390,17 @@ export function drawChart(): void {
     drawScene(context, currentSeconds, scale, cameraScale, cameraX, challengeIndex);
     context.restore();
   }
+  for (const line of chart.lines) {
+    drawJudgeRings(context, line, currentSeconds, scale, cameraScale, cameraX);
+  }
+  drawHitEffects(
+    context,
+    currentSeconds,
+    scale,
+    cameraScale,
+    themeColor(activeTheme, 2, { r: 255, g: 255, b: 255, a: 255 }),
+    activeTheme > 0,
+  );
   drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
   drawCombo(context, scale);
   drawFps(context, scale);

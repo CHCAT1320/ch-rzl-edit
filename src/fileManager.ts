@@ -108,7 +108,9 @@ function createBaseChart() {
     canvasMoves: [createEmptyCanvasMove(0)],
     cameraMove: {
       xPositionKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
+      yPositionKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
       scaleKeyPoints: [defaultKeyPoint(0, 1), defaultKeyPoint(defaultEndTick(), 1)],
+      rotationKeyPoints: [defaultKeyPoint(0, 0), defaultKeyPoint(defaultEndTick(), 0)],
     },
   };
 }
@@ -276,13 +278,17 @@ function sanitizeForExport(value: unknown): unknown {
     return {
       index,
       xPositionKeyPoints: ensureKeyPoints(move.xPositionKeyPoints, 0, endTick),
+      yPositionKeyPoints: ensureKeyPoints(move.yPositionKeyPoints, 0, endTick),
       speedKeyPoints: ensureKeyPoints(move.speedKeyPoints, 1, endTick),
+      rotationKeyPoints: ensureKeyPoints(move.rotationKeyPoints, 0, endTick),
     };
   });
   const camera = (chart.cameraMove && typeof chart.cameraMove === "object") ? chart.cameraMove as Record<string, unknown> : {};
   chart.cameraMove = {
     xPositionKeyPoints: ensureKeyPoints(camera.xPositionKeyPoints, 0, endTick),
+    yPositionKeyPoints: ensureKeyPoints(camera.yPositionKeyPoints, 0, endTick),
     scaleKeyPoints: ensureKeyPoints(camera.scaleKeyPoints, 1, endTick),
+    rotationKeyPoints: ensureKeyPoints(camera.rotationKeyPoints, 0, endTick),
   };
   chart.lines = Array.isArray(chart.lines)
     ? chart.lines

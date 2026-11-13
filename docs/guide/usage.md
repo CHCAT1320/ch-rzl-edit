@@ -19,7 +19,7 @@
 | 当前 Canvas | 切换要编辑的 Canvas。删除 Canvas 后序号会自动回退。 |
 | 新建 Canvas | 追加一个 Canvas，默认 X 关键帧为 0、流速关键帧为 1。 |
 | 删除当前 Canvas | 删除该 Canvas，并移除其上的线节点；其余节点与 Hold 结束 Canvas 的序号前移。至少保留一个 Canvas。 |
-| 编辑对象 | 切换 `line&note` / `cvsMX` / `cvsSpeed` / `cameraX` / `cameraScale` 编辑模式。 |
+| 编辑对象 | 切换 `line&note` / `cvsMX` / `cvsMY` / `cvsSpeed` / `cvsRot` / `cameraX` / `cameraY` / `cameraScale` / `cameraRot` 编辑模式。 |
 
 ## 右侧编辑栏
 
@@ -89,8 +89,27 @@
 - **线条**：显示节点数与音符数摘要。
 
 ::: tip 数值范围
-`xPosition` 输入范围为 -4–4；Canvas X / Camera X 关键帧值为 -4–4；Canvas 流速 / Camera 缩放关键帧值为 -10–10；Canvas 序号限制在现有 Canvas 范围内。
+`xPosition` 输入范围为 -4–4；Canvas X / Y、Camera X / Y 关键帧值为 -4–4；Canvas 流速 / Camera 缩放关键帧值为 -10–10；旋转关键帧为 -360°–360°；Canvas 序号限制在现有 Canvas 范围内。
 :::
+
+## Camera / Canvas 变换事件
+
+编辑对象下拉框中的以下模式用于编辑整体变换事件：
+
+| 模式 | 作用 |
+| --- | --- |
+| `cvsMY` | Canvas 整体 Y 偏移关键帧 |
+| `cvsRot` | Canvas 整体旋转关键帧 |
+| `cameraY` | Camera 垂直偏移关键帧 |
+| `cameraRot` | Camera 旋转关键帧 |
+
+- **Y 偏移**：单位与 `xPosition` 相同（画面宽度），正值让内容向下移动。Camera Y 偏移不受 Camera 缩放影响。
+- **旋转**：单位为度，正值顺时针。Camera 绕判定线中心旋转；Canvas 内的所有元素以 Canvas X、`y=0（判定线）+ Canvas Y 偏移` 为锚点整体旋转。
+- 变换作用于预览场景（编辑模式下网格下方的渲染内容）；编辑叠加层保持原始谱面坐标，便于编辑。
+- **Camera Y / 旋转**只作用于谱面内容（线、音符、判定圈），不作用于打击特效、UI 和 Riztime 过渡遮罩。
+- **Canvas Y / 旋转**在预览中作用于该 Canvas 上的内容；Canvas 序号会跟随 Canvas Y 偏移，并始终旋转到与 Canvas 相同的角度。
+- 打击特效生成在音符经过全部变换后的实际位置，但特效本身不会被旋转。
+- 判定圈绘制在对应线当前时刻的位置上，因此会随 Camera 和 Canvas 的变换移动。
 
 ## 画布操作
 
