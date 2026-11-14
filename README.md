@@ -62,17 +62,23 @@ bun run version:check        # 校验各文件版本是否一致
 
 加 `--dry-run` 只预览改动，不写入文件。
 
+## 发布标签
+
+`release:tag` 会先校验四处版本一致、标签不重复，再基于当前 HEAD 创建附注标签并推送：
+
+```bash
+bun run release:tag          # 使用 v<当前版本>，如 v0.1.3
+bun run release:tag v0.2.0   # 指定标签，需与版本号一致
+```
+
+支持 `--dry-run` 预览、`--allow-dirty` 允许有未提交改动、`--remote <名称>` 指定远端（默认 `origin`）。
+
 ## CI 与发布
 
 - **文档**：`.github/workflows/docs.yml` 在推送到 `main` 时构建 VitePress 并部署到 GitHub Pages。
   - 首次使用需在仓库 **Settings → Pages → Build and deployment** 将 Source 设为 **GitHub Actions**。
   - base 会从 GitHub Pages 配置自动读取：项目站点为 `/<仓库名>/`，绑定自定义域名后为 `/`；如需强制覆盖，可设置仓库变量 `DOCS_BASE`。
 - **Release**：`.github/workflows/release.yml` 在推送 `v*` 或数字开头的 tag 时，于 `windows-latest` 构建 NSIS 安装包（`.exe`），并创建 **draft release** 上传产物。
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
 
 构建完成后到 GitHub Releases 检查草稿并手动发布。
 
