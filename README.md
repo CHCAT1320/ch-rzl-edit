@@ -48,6 +48,20 @@ bun run docs:preview
 
 文档入口：`docs/index.md`。
 
+## 版本号
+
+版本号由脚本统一维护，会同步修改 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`：
+
+```bash
+bun run version:bump patch   # 0.1.2 -> 0.1.3
+bun run version:bump minor   # 0.1.2 -> 0.2.0
+bun run version:bump major   # 0.1.2 -> 1.0.0
+bun run version:bump 1.2.3   # 指定版本
+bun run version:check        # 校验各文件版本是否一致
+```
+
+加 `--dry-run` 只预览改动，不写入文件。
+
 ## CI 与发布
 
 - **文档**：`.github/workflows/docs.yml` 在推送到 `main` 时构建 VitePress 并部署到 GitHub Pages。

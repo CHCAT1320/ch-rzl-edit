@@ -761,7 +761,8 @@ function drawEditorObjects(
     const lineColor = currentColor(seconds, line.lineColor);
     const pointColors = points.map((point) => mixColor(point.color, lineColor));
     context.lineWidth = Math.max(1, 6 * viewportScale);
-    context.lineCap = "butt";
+    context.lineCap = "round";
+    context.lineJoin = "round";
     for (let index = 0; index < visiblePoints.length - 1; index += 1) {
       const source = points[index];
       const next = points[index + 1];
@@ -772,34 +773,26 @@ function drawEditorObjects(
       const endColor = pointColors[index + 1];
       const dx = end.x - start.x;
       const dy = end.y - start.y;
-      const lengthSq = dx * dx + dy * dy;
-      if (lengthSq <= 1e-12) continue;
-      for (let part = 0; part < 16; part += 1) {
+      if (dx * dx + dy * dy <= 1e-12) continue;
+      const gradient = context.createLinearGradient(start.x, start.y, end.x, end.y);
+      gradient.addColorStop(0, color(startColor));
+      gradient.addColorStop(1, color(endColor));
+      context.strokeStyle = gradient;
+      context.beginPath();
+      for (let part = 0; part <= 16; part += 1) {
         const ratio = part / 16;
-        const nextRatio = (part + 1) / 16;
         const x = start.x + dx * ease(source.easeType, ratio);
         const y = start.y + dy * ratio;
-        const nextX = start.x + dx * ease(source.easeType, nextRatio);
-        const nextY = start.y + dy * nextRatio;
-        const midX = (x + nextX) / 2;
-        const midY = (y + nextY) / 2;
-        const blend = Math.max(0, Math.min(1, ((midX - start.x) * dx + (midY - start.y) * dy) / lengthSq));
-        context.strokeStyle = color({
-          r: number(startColor.r) + (number(endColor.r) - number(startColor.r)) * blend,
-          g: number(startColor.g) + (number(endColor.g) - number(startColor.g)) * blend,
-          b: number(startColor.b) + (number(endColor.b) - number(startColor.b)) * blend,
-          a: number(startColor.a, 255) + (number(endColor.a, 255) - number(startColor.a, 255)) * blend,
-        });
-        context.beginPath();
-        context.moveTo(x, y);
-        context.lineTo(nextX, nextY);
-        context.stroke();
+        if (part === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
       }
+      context.stroke();
     }
 
     if (selectedLine) {
       context.strokeStyle = "rgba(255, 230, 80, 0.95)";
       context.lineWidth = Math.max(2, 3 * viewportScale);
+      context.lineJoin = "round";
       for (let index = 0; index < visiblePoints.length - 1; index += 1) {
         const source = points[index];
         const next = points[index + 1];
@@ -993,9 +986,8 @@ function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number
   if (line.linePoints.length === 0) return;
   const lineColor = currentColor(seconds, line.lineColor);
   const pointColors = line.linePoints.map((point) => mixColor(point.color, lineColor));
-  const capRadius = Math.max(1, 4 * viewportScale);
   context.lineWidth = Math.max(1, 6 * viewportScale);
-  context.lineCap = "butt";
+  context.lineCap = "round";
   const fillCircle = (x: number, y: number, radius: number, fill: ChartColor): void => {
     context.fillStyle = color(fill);
     context.beginPath();
@@ -1020,32 +1012,23 @@ function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number
     const dy = p1.y - p0.y;
     const lengthSq = dx * dx + dy * dy;
     if (lengthSq <= 1e-12) {
-      fillCircle(p0.x, p0.y, capRadius, startColor);
+      fillCircle(p0.x, p0.y, Math.max(1, 3 * viewportScale), startColor);
       continue;
     }
-    for (let part = 0; part < 16; part += 1) {
+    const gradient = context.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
+    gradient.addColorStop(0, color(startColor));
+    gradient.addColorStop(1, color(endColor));
+    context.strokeStyle = gradient;
+    context.lineJoin = "round";
+    context.beginPath();
+    for (let part = 0; part <= 16; part += 1) {
       const ratio = part / 16;
-      const nextRatio = (part + 1) / 16;
       const x = p0.x + dx * ease(start.easeType, ratio);
       const y = p0.y + dy * ratio;
-      const nextX = p0.x + dx * ease(start.easeType, nextRatio);
-      const nextY = p0.y + dy * nextRatio;
-      const midX = (x + nextX) / 2;
-      const midY = (y + nextY) / 2;
-      const blend = Math.max(0, Math.min(1, ((midX - p0.x) * dx + (midY - p0.y) * dy) / lengthSq));
-      context.strokeStyle = color({
-        r: number(startColor.r) + (number(endColor.r) - number(startColor.r)) * blend,
-        g: number(startColor.g) + (number(endColor.g) - number(startColor.g)) * blend,
-        b: number(startColor.b) + (number(endColor.b) - number(startColor.b)) * blend,
-        a: number(startColor.a, 255) + (number(endColor.a, 255) - number(startColor.a, 255)) * blend,
-      });
-      context.beginPath();
-      context.moveTo(x, y);
-      context.lineTo(nextX, nextY);
-      context.stroke();
+      if (part === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
     }
-    if (index === 0) fillCircle(p0.x, p0.y, capRadius, startColor);
-    if (index === line.linePoints.length - 2) fillCircle(p1.x, p1.y, capRadius, endColor);
+    context.stroke();
   }
 
   if (line.linePoints.length === 1) {
