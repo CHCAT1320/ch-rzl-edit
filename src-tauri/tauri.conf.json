@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ch-rzl-edit",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "identifier": "com.chcat1320.ch-rzl-edit",
   "build": {
     "beforeDevCommand": "bun run dev",
