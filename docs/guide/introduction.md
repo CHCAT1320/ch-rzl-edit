@@ -6,19 +6,19 @@
 
 - **线编辑**：创建线节点、调整 `xPosition` / 时间 / Canvas / 缓动 / 节点颜色，支持框选、拖动、复制粘贴和撤销。
 - **音符编辑**：Tap（`type: 0`）、Drag（`type: 1`）、Hold（`type: 2`），可修改开始时间、结束时间、结束 Canvas 和类型。
-- **Canvas 关键帧**：编辑每个 Canvas 的 X 位移与流速关键帧；支持按横线密度批量生成流速缓动关键帧。
-- **Camera 关键帧**：编辑 Camera 的 X 位移与缩放关键帧。
+- **Canvas 关键帧**：编辑每个 Canvas 的 X/Y 位移、流速与旋转关键帧；支持按横线密度批量生成流速缓动关键帧。
+- **Camera 关键帧**：编辑 Camera 的 X/Y 位移、缩放与旋转关键帧。
 - **谱面设置**：基础 BPM、BPM 变化、主题颜色、Riztime（挑战段落）时间段与过渡。
 - **线条外观**：线颜色关键帧与判定圈颜色关键帧，按时间插值。
 - **实时预览**：按住 `T` 预览播放，带判定圈、打击特效和 Web Audio 打击音。
-- **导入导出**：读取/写入 Rizline 谱面 JSON；桌面端使用系统文件对话框，浏览器端使用文件选择器。
+- **导入导出**：读取/写入 Rizline 谱面 JSON；导入时校验格式并按错误/警告分级，桌面端使用系统文件对话框，浏览器端使用文件选择器。
 
 ## 技术栈
 
 | 分类 | 技术 | 说明 |
 | --- | --- | --- |
 | 语言 | TypeScript 5.6 | 全量类型化的渲染与编辑逻辑 |
-| UI | 原生 DOM + Canvas 2D | 没有使用 React/Vue 等框架，界面由 `index.html` + CSS 构建 |
+| UI | Vue 3 + Vue Router + Canvas 2D | 开始界面、编辑器框架与应用内弹窗使用 Vue SFC，Canvas 渲染与交互逻辑保持独立 |
 | 构建 | Vite 6 | 开发服务器与生产构建 |
 | 桌面容器 | Tauri 2（Rust） | 窗口、系统文件对话框、文件读写、DevTools |
 | 文件访问 | `@tauri-apps/plugin-dialog`、`@tauri-apps/plugin-fs` | 桌面端原生文件对话框与读写 |
@@ -36,9 +36,15 @@
 ```text
 ch-rzl-edit/
 ├─ src/
-│  ├─ main.ts           # 入口：事件绑定、快捷键、渲染循环启动
+│  ├─ main.ts           # Vue 应用入口
+│  ├─ App.vue           # 根组件与全局弹窗
+│  ├─ router/           # 路由：开始界面 / 编辑器
+│  ├─ views/            # HomeView / EditorView
+│  ├─ components/       # 顶部栏、侧栏、应用内弹窗
 │  ├─ canvas.ts         # 画布尺寸、设备像素比、9:16 居中区域计算
 │  ├─ chartEditor.ts    # 编辑状态、命中检测、选择、拖动、剪贴板、撤销、属性面板
+│  ├─ chartValidator.ts # 导入格式校验、错误/警告分级与默认值修正
+│  ├─ dialog.ts         # 应用内提示与确认弹窗
 │  ├─ editMode.ts       # 编辑/预览模式、时间轴映射、横线/竖线与播放头绘制
 │  ├─ drawChart.ts      # 谱面渲染：线、音符、判定圈、主题、特效、预览播放
 │  ├─ fileManager.ts    # 谱面/音乐导入导出、字段清洗与默认值
@@ -46,7 +52,7 @@ ch-rzl-edit/
 ├─ public/audio/        # hit.wav / drag.wav
 ├─ src-tauri/           # Tauri 2 配置与 Rust 端
 ├─ docs/                # VitePress 文档（本目录）
-├─ index.html           # 编辑器界面结构
+├─ index.html           # Vite 挂载点，仅包含 #app
 ├─ vite.config.ts       # Vite 配置（固定 1420 端口供 Tauri 使用）
 └─ package.json
 ```
@@ -65,6 +71,6 @@ ch-rzl-edit/
 
 ## 适用范围
 
-- 谱面格式为编辑器导出的 Rizline JSON（`fileVersion: 1`）。
+- 谱面格式为编辑器导出的 Rizline JSON（`fileVersion: 0` 或 `1`）。
 - 编辑器按 720×1280 的设计分辨率渲染，并以 9:16 居中显示。
-- 音乐与谱面分别导入；新建谱面时会要求先选择音乐，以便自动补齐结束 tick。
+- 开始界面可一次导入谱面与音乐；新建谱面时会要求先选择音乐，以便自动补齐结束 tick。

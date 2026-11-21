@@ -1,6 +1,8 @@
 # 谱面 JSON 格式
 
-编辑器使用 Rizline 谱面 JSON。导入时读取原始字段，导出时会做统一清洗与补全。以下字段以编辑器导出结构为准。
+编辑器使用 Rizline 谱面 JSON。导入时读取原始字段并做格式校验，导出时会做统一清洗与补全。以下字段以编辑器导出结构为准。
+
+导入校验按错误/警告分级：错误会阻止导入（可在弹窗中选择「强制进入」），警告允许继续编辑。
 
 ## 顶层结构
 
@@ -26,7 +28,7 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `fileVersion` | number | 文件版本，当前为 `1`。 |
+| `fileVersion` | number | 文件版本，支持 `0` 或 `1`；其它值导入时警告并修正为 `1`。 |
 | `songsName` | string | 曲名，仅作标识。 |
 | `bPM` | number | 基础 BPM，必须大于 0。 |
 | `offset` | number | 偏移（秒），参与编辑网格的时间换算，导出时保留。 |
@@ -125,7 +127,7 @@
 | `speedKeyPoints` | Canvas 流速；`1` 为基准速度，可为负值。 |
 | `rotationKeyPoints` | Canvas 整体旋转；单位为度，正值顺时针。 |
 
-导出时每个 Canvas 至少保留两个关键帧。
+导出时每个 Canvas 至少保留两个关键帧。未编辑的 `yPositionKeyPoints` / `rotationKeyPoints`（值全为 0）默认省略。
 
 ### CameraMove
 
@@ -142,6 +144,8 @@
 - `yPositionKeyPoints`：Camera 垂直偏移；单位为画面宽度，正值向下，不受 Camera 缩放影响。
 - `scaleKeyPoints`：Camera 缩放，`1` 为 100%。
 - `rotationKeyPoints`：Camera 旋转；单位为度，正值顺时针，围绕判定线中心旋转。
+
+导出时未编辑的 `yPositionKeyPoints` / `rotationKeyPoints`（值全为 0）默认省略。
 
 ## 线对象
 
@@ -282,11 +286,14 @@
 
 ## 导出清洗规则
 
+- `fileVersion` 仅保留 `0` 或 `1`；其它值写为 `1`。
 - 所有颜色通道取整并限制在 `0–255`。
 - `bPM` 最小为 1，`bpmShifts` 缺失时导出为空数组。
 - `themes` 为空时至少导出一个包含 3 个颜色的主题；每个主题固定输出 3 个颜色。
 - `challengeTimes` 保证 `end >= start`，`transTime >= 0`。
 - `canvasMoves` / `cameraMove` 至少保留两个关键帧；只有一个时自动补一个结束关键帧。
-- 音符坐标、类型、时间取整或钳制到合法范围；Hold 的结束 tick 不早于开始 tick。
+- 未编辑的 Camera / Canvas Y 与旋转关键帧（值全为 0）默认不导出。
+- 非法 `easeType` 写为 `1`；非法音符 `type` 写为 `0`（Tap）。
+- 音符坐标、时间取整或钳制到合法范围；Hold 的结束 tick 不早于开始 tick。
 - `otherInformations` 统一输出为数组：Hold 至少包含结束 tick、结束 Canvas、结束 `floorPosition`；非 Hold 输出 `[]`。
 - 没有线节点的线会被移除。

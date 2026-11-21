@@ -1130,6 +1130,54 @@ function easeSelectHtml(id: string, value: number): string {
   return `<select id="${id}">${options}</select>`;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function createSvgElement<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] {
+  return document.createElementNS(SVG_NS, tag);
+}
+
+function updateEaseCurve(svg: SVGSVGElement, easeType: number): void {
+  const curve = svg.querySelector<SVGPathElement>(".easeCurvePath");
+  if (!curve) return;
+  const points: string[] = [];
+  for (let step = 0; step <= 100; step += 1) {
+    const ratio = step / 100;
+    const x = 4 + ratio * 92;
+    const y = 96 - speedEase(easeType, ratio) * 92;
+    points.push(`${step === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`);
+  }
+  curve.setAttribute("d", points.join(" "));
+}
+
+function easeCurveSvg(easeType: number): SVGSVGElement {
+  const svg = createSvgElement("svg");
+  svg.classList.add("easeCurvePreview");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-hidden", "true");
+
+  const reference = createSvgElement("line");
+  reference.setAttribute("class", "easeCurveReference");
+  reference.setAttribute("x1", "4");
+  reference.setAttribute("y1", "96");
+  reference.setAttribute("x2", "96");
+  reference.setAttribute("y2", "4");
+  reference.setAttribute("vector-effect", "non-scaling-stroke");
+
+  const grid = createSvgElement("path");
+  grid.setAttribute("class", "easeCurveGrid");
+  grid.setAttribute("d", "M 50 4 L 50 96 M 4 50 L 96 50");
+  grid.setAttribute("vector-effect", "non-scaling-stroke");
+
+  const curve = createSvgElement("path");
+  curve.setAttribute("class", "easeCurvePath");
+  curve.setAttribute("vector-effect", "non-scaling-stroke");
+
+  svg.append(reference, grid, curve);
+  updateEaseCurve(svg, easeType);
+  return svg;
+}
+
 function speedEase(type: number | undefined, value: number): number {
   const fn = speedEaseFunctions[Math.max(0, Math.min(speedEaseFunctions.length - 1, Math.trunc(Number(type) || 0)))];
   return fn(Math.max(0, Math.min(1, value)));
@@ -1202,10 +1250,12 @@ function refreshObjectForm(): void {
     const easeRow = document.createElement("label");
     easeRow.className = "chartSpeedControl";
     easeRow.innerHTML = `<span>缓动类型</span>${easeSelectHtml("speedEaseType", speedEaseType)}`;
+    const easeCurve = easeCurveSvg(speedEaseType);
     easeRow.querySelector("select")?.addEventListener("change", (event) => {
       speedEaseType = clampNumber(Number((event.target as HTMLSelectElement).value), 0, 18, 0);
+      updateEaseCurve(easeCurve, speedEaseType);
     });
-    form.append(easeRow);
+    form.append(easeRow, easeCurve);
     const bake = document.createElement("button");
     bake.type = "button";
     bake.className = "miniButton";
@@ -1248,13 +1298,16 @@ function refreshObjectForm(): void {
     row.className = "chartSpeedControl";
     if (key === "easeType") {
       row.innerHTML = `<span>${label}</span>${easeSelectHtml("", value)}`;
+      const easeCurve = easeCurveSvg(value);
       row.querySelector("select")?.addEventListener("change", (event) => {
         snapshot();
-        Object.assign(target, { easeType: clampNumber(Number((event.target as HTMLSelectElement).value), 0, 18, 0) });
+        const easeType = clampNumber(Number((event.target as HTMLSelectElement).value), 0, 18, 0);
+        Object.assign(target, { easeType });
+        updateEaseCurve(easeCurve, easeType);
         notifyChange();
         refreshProperties();
       });
-      form.append(row);
+      form.append(row, easeCurve);
       continue;
     }
     row.innerHTML = `<span>${label}</span><input type="number" step="0.01" value="${value}">`;
