@@ -1,3 +1,5 @@
+import { MONO_FONT_STACK } from "./canvas";
+
 let previewMode = false;
 let editModeEnabled = true;
 let beatChart: BeatChart | null = null;
@@ -146,14 +148,14 @@ function drawBeatLines(
       context.lineTo(surfaceWidth / 2, y);
       context.stroke();
       context.fillStyle = context.strokeStyle;
-      context.font = `${Math.max(10, 12 * viewportScale)}px Arial`;
+      context.font = `${Math.max(10, 12 * viewportScale)}px ${MONO_FONT_STACK}`;
       context.textAlign = "left";
       context.textBaseline = "bottom";
       context.fillText(`${tick.toFixed(density > 1 ? 2 : 0)} | ${seconds.toFixed(3)}s`, -surfaceWidth / 2 + 4, y - 2);
     }
   }
 
-  context.font = `${Math.max(10, 12 * viewportScale)}px Arial`;
+  context.font = `${Math.max(10, 12 * viewportScale)}px ${MONO_FONT_STACK}`;
   context.textAlign = "center";
   context.textBaseline = "top";
   const verticalDensity = getVerticalDensity();

@@ -1,12 +1,14 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
-import { setChart } from "./drawChart";
+import { setChart, resetPlaybackState } from "./drawChart";
 import { setBeatChart } from "./editMode";
 import { applyMusicEndTicks, createEmptyCanvasMove, defaultEndTick, defaultKeyPoint, setEditorChart } from "./chartEditor";
 import { resumeHitSounds } from "./hitSound";
+import { showAlert } from "./dialog";
 
 let chartData: unknown = null;
 let musicUrl: string | null = null;
+let currentMusicSrc: string | null = null;
 let chartImported = false;
 
 function isTauri(): boolean {
@@ -58,7 +60,6 @@ async function pickMusicPath(): Promise<string | null> {
 }
 
 export async function loadChart(): Promise<void> {
-  if (chartImported) return;
   let text = "";
   if (isTauri()) {
     const path = await pickChartPath();
@@ -76,19 +77,35 @@ export async function loadChart(): Promise<void> {
     setBeatChart(chartData);
     setEditorChart(chartData);
     chartImported = true;
-    setChartButtonsDisabled(true);
     window.dispatchEvent(new CustomEvent("chartloaded", { detail: chartData }));
     console.log(chartData);
   } catch {
-    window.alert("谱面文件不是有效的 JSON 文件");
+    void showAlert("谱面文件不是有效的 JSON 文件");
   }
 }
 
-function setChartButtonsDisabled(disabled: boolean): void {
-  const loadButton = document.querySelector<HTMLButtonElement>("#loadChartButton");
-  const newButton = document.querySelector<HTMLButtonElement>("#newChartButton");
-  if (loadButton) loadButton.disabled = disabled;
-  if (newButton) newButton.disabled = disabled;
+export function hasImportedChart(): boolean {
+  return chartImported;
+}
+
+export function resetSession(): void {
+  const audio = document.querySelector<HTMLAudioElement>("#audio");
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    audio.classList.add("audioDisabled");
+    audio.setAttribute("aria-disabled", "true");
+  }
+  if (musicUrl) URL.revokeObjectURL(musicUrl);
+  musicUrl = null;
+  currentMusicSrc = null;
+  chartData = null;
+  chartImported = false;
+  setChart(null);
+  setBeatChart(null);
+  setEditorChart(null);
+  resetPlaybackState();
 }
 
 function createBaseChart() {
@@ -121,13 +138,11 @@ function applyChart(data: unknown): void {
   setBeatChart(chartData);
   setEditorChart(chartData);
   chartImported = true;
-  setChartButtonsDisabled(true);
   window.dispatchEvent(new CustomEvent("chartloaded", { detail: chartData }));
   console.log("已创建基础谱面", chartData);
 }
 
 export async function newChart(): Promise<void> {
-  if (chartImported) return;
   if (isTauri()) {
     const musicPath = await pickMusicPath();
     if (!musicPath) return;
@@ -146,7 +161,20 @@ function bindAudioElement(src: string): void {
   if (!audio) return;
   if (musicUrl) URL.revokeObjectURL(musicUrl);
   musicUrl = src.startsWith("blob:") ? src : null;
+  currentMusicSrc = src;
   audio.src = src;
+  audio.classList.remove("audioDisabled");
+  audio.removeAttribute("aria-disabled");
+  audio.addEventListener("loadedmetadata", () => {
+    applyMusicEndTicks();
+  }, { once: true });
+  audio.load();
+}
+
+export function restoreMusicElement(): void {
+  const audio = document.querySelector<HTMLAudioElement>("#audio");
+  if (!audio || !currentMusicSrc || audio.src) return;
+  audio.src = currentMusicSrc;
   audio.classList.remove("audioDisabled");
   audio.removeAttribute("aria-disabled");
   audio.addEventListener("loadedmetadata", () => {
@@ -177,7 +205,7 @@ async function applyMusicPath(path: string): Promise<void> {
     bindAudioElement(URL.createObjectURL(blob));
   } catch (error) {
     console.error("音乐导入失败", error);
-    window.alert("音乐导入失败，请重试或换一个音频文件");
+    void showAlert("音乐导入失败，请重试或换一个音频文件");
   }
 }
 
@@ -241,6 +269,10 @@ function ensureKeyPoints(points: unknown, fallbackValue: number, endTick: number
   return list;
 }
 
+function isUneditedKeyPoints(points: Record<string, unknown>[]): boolean {
+  return points.every((point) => finiteNumber(point.value, 0) === 0 && Math.trunc(finiteNumber(point.easeType, 0)) === 0);
+}
+
 function sanitizeForExport(value: unknown): unknown {
   const chart = (value && typeof value === "object") ? { ...(value as Record<string, unknown>) } : {};
   const endTick = Math.max(1, finiteNumber(defaultEndTick(), 1_000_000));
@@ -275,21 +307,27 @@ function sanitizeForExport(value: unknown): unknown {
     : [];
   chart.canvasMoves = canvasMoves.map((item, index) => {
     const move = (item && typeof item === "object") ? item as Record<string, unknown> : {};
-    return {
+    const result: Record<string, unknown> = {
       index,
       xPositionKeyPoints: ensureKeyPoints(move.xPositionKeyPoints, 0, endTick),
-      yPositionKeyPoints: ensureKeyPoints(move.yPositionKeyPoints, 0, endTick),
       speedKeyPoints: ensureKeyPoints(move.speedKeyPoints, 1, endTick),
-      rotationKeyPoints: ensureKeyPoints(move.rotationKeyPoints, 0, endTick),
     };
+    const yPositionKeyPoints = ensureKeyPoints(move.yPositionKeyPoints, 0, endTick);
+    if (!isUneditedKeyPoints(yPositionKeyPoints)) result.yPositionKeyPoints = yPositionKeyPoints;
+    const rotationKeyPoints = ensureKeyPoints(move.rotationKeyPoints, 0, endTick);
+    if (!isUneditedKeyPoints(rotationKeyPoints)) result.rotationKeyPoints = rotationKeyPoints;
+    return result;
   });
   const camera = (chart.cameraMove && typeof chart.cameraMove === "object") ? chart.cameraMove as Record<string, unknown> : {};
-  chart.cameraMove = {
+  const cameraMove: Record<string, unknown> = {
     xPositionKeyPoints: ensureKeyPoints(camera.xPositionKeyPoints, 0, endTick),
-    yPositionKeyPoints: ensureKeyPoints(camera.yPositionKeyPoints, 0, endTick),
     scaleKeyPoints: ensureKeyPoints(camera.scaleKeyPoints, 1, endTick),
-    rotationKeyPoints: ensureKeyPoints(camera.rotationKeyPoints, 0, endTick),
   };
+  const cameraYKeyPoints = ensureKeyPoints(camera.yPositionKeyPoints, 0, endTick);
+  if (!isUneditedKeyPoints(cameraYKeyPoints)) cameraMove.yPositionKeyPoints = cameraYKeyPoints;
+  const cameraRotationKeyPoints = ensureKeyPoints(camera.rotationKeyPoints, 0, endTick);
+  if (!isUneditedKeyPoints(cameraRotationKeyPoints)) cameraMove.rotationKeyPoints = cameraRotationKeyPoints;
+  chart.cameraMove = cameraMove;
   chart.lines = Array.isArray(chart.lines)
     ? chart.lines
         .map((item) => {
@@ -351,7 +389,7 @@ function sanitizeForExport(value: unknown): unknown {
 
 export async function exportChart(): Promise<void> {
   if (chartData === null) {
-    window.alert("请先导入或新建谱面");
+    void showAlert("请先导入或新建谱面");
     return;
   }
 

@@ -1,4 +1,4 @@
-import { calculateCenterSize } from "./canvas";
+import { calculateCenterSize, MONO_FONT_STACK } from "./canvas";
 import { editorCanvasTransform, getEditorVisualState } from "./chartEditor";
 import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
@@ -710,7 +710,7 @@ function drawCanvasIndexes(
   const maxY = metrics.height - fontSize * 0.6;
   const rowGap = count > 1 ? Math.min(fontSize * 1.15, Math.max(0, maxY - minY) / (count - 1)) : 0;
   context.save();
-  context.font = `${fontSize}px Arial`;
+  context.font = `${fontSize}px ${MONO_FONT_STACK}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = "rgba(0, 0, 0, 0.9)";
@@ -1204,7 +1204,7 @@ function drawCombo(context: CanvasRenderingContext2D, viewportScale: number): vo
   const labelFont = 40 * viewportScale;
   context.textAlign = "right";
   context.textBaseline = "alphabetic";
-  context.font = `${comboFont}px sans-serif`;
+  context.font = `${comboFont}px ${MONO_FONT_STACK}`;
   context.lineWidth = Math.max(1, 2 * viewportScale);
   context.strokeStyle = "#ffffff";
   context.fillStyle = "#000000";
@@ -1215,7 +1215,7 @@ function drawCombo(context: CanvasRenderingContext2D, viewportScale: number): vo
   context.strokeText(comboText, rightEdge, comboY);
   context.fillText(comboText, rightEdge, comboY);
   const comboWidth = context.measureText(comboText).width;
-  context.font = `${labelFont}px sans-serif`;
+  context.font = `${labelFont}px ${MONO_FONT_STACK}`;
   const labelRight = rightEdge - comboWidth - 8 * viewportScale;
   context.strokeText("CATPLAY", labelRight, comboY);
   context.fillText("CATPLAY", labelRight, comboY);
@@ -1250,7 +1250,7 @@ function segmentIntersectsScreen(start: Point, end: Point, width: number, height
 
 function drawFps(context: CanvasRenderingContext2D, viewportScale: number): void {
   context.save();
-  context.font = `${Math.max(12, 24 * viewportScale)}px Arial`;
+  context.font = `${Math.max(12, 24 * viewportScale)}px ${MONO_FONT_STACK}`;
   context.textAlign = "left";
   context.textBaseline = "top";
   context.fillStyle = "#ffffff";

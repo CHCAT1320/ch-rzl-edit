@@ -1,3 +1,5 @@
+export const MONO_FONT_STACK = "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace";
+
 export interface CanvasCenterSize {
   x: number;
   y: number;

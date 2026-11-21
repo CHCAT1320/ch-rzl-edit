@@ -4,7 +4,7 @@ Rizline 谱面编辑器。支持线节点、Tap / Drag / Hold、Canvas 与 Camer
 
 ## 技术栈
 
-- TypeScript 5.6 + 原生 DOM + Canvas 2D
+- TypeScript 5.6 + Vue 3 + Vue Router 4 + Canvas 2D
 - Vite 6
 - Tauri 2（Rust）
 - `@tauri-apps/plugin-dialog` / `plugin-fs`
@@ -86,6 +86,9 @@ bun run release:tag v0.2.0   # 指定标签，需与版本号一致
 
 ```text
 src/          编辑器、渲染、文件管理与音效
+  views/      路由页面
+  components/ 编辑器头部与侧栏
+  router/     Vue Router 配置
 src-tauri/    Tauri 2 桌面端
 docs/         VitePress 文档
 public/audio/ 打击音效

@@ -1,8 +1,18 @@
+:root {
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-ui: "JetBrains Mono", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", monospace;
+}
+
 html, body {
   border: 0;
   margin: 0;
   padding: 0;
   background-color: black;
+  font-family: var(--font-ui);
+}
+
+input, select, textarea, button {
+  font-family: inherit;
 }
 header {
   width: 100vw;
@@ -81,6 +91,26 @@ header {
   gap: 12px;
   color: #f2f2f2;
   font-size: 16px;
+}
+
+.chartSpeedControl input[type="number"],
+.chartSpeedControl select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #777;
+  border-radius: 4px;
+  background-color: #303030;
+  color: #f2f2f2;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.chartSpeedControl input[type="number"] {
+  width: 96px;
+}
+
+.chartSpeedControl select {
+  min-width: 140px;
 }
 
 #chartSpeed {
@@ -211,4 +241,16 @@ header .headerCanvasControl:first-of-type {
 .simpleButton:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.headerLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
+.container {
+  min-height: 100vh;
 }

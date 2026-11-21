@@ -1,5 +1,6 @@
 type Color = { r?: number; g?: number; b?: number; a?: number };
 import { beatTickToSeconds, getEditTimeY, getEditorXOffset, getVerticalDensity, isEditMode } from "./editMode";
+import { isDialogOpen, showAlert } from "./dialog";
 type Point = { time: number; xPosition: number; color: Color; easeType?: number; canvasIndex: number; floorPosition?: number };
 type Note = { type: number; time: number; floorPosition?: number; otherInformations?: number[] };
 type ColorPoint = { time: number; startColor: Color; endColor: Color };
@@ -184,6 +185,10 @@ export function setEditorChart(value: unknown): void {
   selectedItems = [];
   pasteMode = false;
   boxSelectMode = false;
+  if (!chart) {
+    undoStack.length = 0;
+    clipboard = null;
+  }
   refreshProperties();
   refreshSettings();
 }
@@ -1134,7 +1139,7 @@ function bakeSpeedEase(): void {
   if (!chart || mode() !== "canvasSpeed") return;
   const keys = selectedItems.map((item) => item.item).filter((item): item is KeyPoint => !!item);
   if (keys.length < 2) {
-    window.alert("请先选中速度起始点和结束点");
+    void showAlert("请先选中速度起始点和结束点");
     return;
   }
   const [start, end] = [...keys].sort((left, right) => left.time - right.time);
@@ -1304,7 +1309,7 @@ function applyProperties(): void {
     if (!target) return;
     Object.assign(target, value);
     notifyChange();
-  } catch { window.alert("属性 JSON 格式错误"); }
+  } catch { void showAlert("属性 JSON 格式错误"); }
 }
 
 function setEditingCanvasIndex(index: number): void {
@@ -1324,7 +1329,7 @@ function addCanvas(): void {
 
 function deleteCurrentCanvas(): void {
   if (!chart || chart.canvasMoves.length <= 1) {
-    window.alert("至少保留一个 Canvas");
+    void showAlert("至少保留一个 Canvas");
     return;
   }
   const index = editingCanvasIndex();
@@ -1357,9 +1362,9 @@ function deleteSelection(): void {
   deleteCurrentSelections();
 }
 
-export function setupChartEditor(): void {
+export function setupChartEditor(): () => void {
   const canvas = document.querySelector<HTMLCanvasElement>("#cvs");
-  if (!canvas) return;
+  if (!canvas) return () => {};
   editorCanvas = canvas;
   setupSettings();
   document.querySelector("#addCanvasButton")?.addEventListener("click", addCanvas);
@@ -1375,10 +1380,11 @@ export function setupChartEditor(): void {
       if (Number.isFinite(min) && Number.isFinite(max)) readClamped(input, min, max, Number(input.value) || min);
     });
   });
-  document.addEventListener("mousedown", (event) => {
+  const handleDocumentMouseDown = (event: MouseEvent): void => {
     const target = event.target;
     if (target instanceof HTMLButtonElement || target instanceof HTMLAudioElement) target.blur();
-  }, true);
+  };
+  document.addEventListener("mousedown", handleDocumentMouseDown, true);
   document.querySelectorAll<HTMLButtonElement>(".propertyTab").forEach((tab) => tab.addEventListener("click", () => {
     document.querySelectorAll(".propertyTab").forEach((item) => item.classList.toggle("active", item === tab));
     document.querySelectorAll(".propertyPanel").forEach((panel) => panel.classList.toggle("active", panel.id === tab.dataset.panel));
@@ -1418,7 +1424,7 @@ export function setupChartEditor(): void {
       event.preventDefault();
     }
   });
-  window.addEventListener("mousemove", (event) => {
+  const handleWindowMouseMove = (event: MouseEvent): void => {
     mouseX = event.clientX;
     mouseY = event.clientY;
     if (marquee) {
@@ -1434,8 +1440,9 @@ export function setupChartEditor(): void {
       pointerMoved = true;
     }
     updateDraggedObject(event.clientX, event.clientY);
-  });
-  window.addEventListener("mouseup", () => {
+  };
+  window.addEventListener("mousemove", handleWindowMouseMove);
+  const handleWindowMouseUp = (): void => {
     if (!dragReady) return;
     if (dragging && dragSnapshot && dragSnapshot !== JSON.stringify(chart)) {
       undoStack.push(dragSnapshot);
@@ -1444,7 +1451,8 @@ export function setupChartEditor(): void {
     dragging = false;
     dragReady = false;
     dragSelection = null;
-  });
+  };
+  window.addEventListener("mouseup", handleWindowMouseUp);
   canvas.addEventListener("wheel", (event) => {
     const audio = document.querySelector<HTMLAudioElement>("#audio");
     if (!audio?.src) return;
@@ -1456,7 +1464,8 @@ export function setupChartEditor(): void {
     window.dispatchEvent(new Event("editorseek"));
   }, { passive: false });
   document.querySelector("#applyProperty")?.addEventListener("click", applyProperties);
-  window.addEventListener("keydown", (event) => {
+  const handleGlobalKeyDown = (event: KeyboardEvent): void => {
+    if (isDialogOpen()) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
     if (!isEditMode()) return;
@@ -1497,6 +1506,16 @@ export function setupChartEditor(): void {
     if (event.code === "KeyQ") { createNote(0); return; }
     if (event.code === "KeyW") { createNote(1); return; }
     if (event.code === "KeyE") { createNote(2); }
-  });
+  };
+  window.addEventListener("keydown", handleGlobalKeyDown);
+  refreshSettings();
+  refreshProperties();
+  return () => {
+    document.removeEventListener("mousedown", handleDocumentMouseDown, true);
+    window.removeEventListener("mousemove", handleWindowMouseMove);
+    window.removeEventListener("mouseup", handleWindowMouseUp);
+    window.removeEventListener("keydown", handleGlobalKeyDown);
+    if (editorCanvas === canvas) editorCanvas = null;
+  };
 }
 import { calculateCenterSize } from "./canvas";
