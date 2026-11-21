@@ -3,9 +3,12 @@ import { defineConfig } from "vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const base = process.env.VITE_BASE ?? "/";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  base,
   plugins: [vue()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

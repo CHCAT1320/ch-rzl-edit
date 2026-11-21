@@ -48,6 +48,17 @@ jobs:
       - name: Build docs
         run: bun run docs:build
 
+      - name: Build web app
+        env:
+          VITE_BASE: ${{ env.DOCS_BASE }}app/
+        run: bun run build
+
+      - name: Add web app to Pages
+        shell: bash
+        run: |
+          mkdir -p docs/.vitepress/dist/app
+          cp -R dist/. docs/.vitepress/dist/app/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

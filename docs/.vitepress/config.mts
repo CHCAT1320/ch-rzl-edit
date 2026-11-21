@@ -14,6 +14,7 @@ export default defineConfig({
   },
   themeConfig: {
     nav: [
+      { text: "在线编辑器", link: "/app/", target: "_self" },
       { text: "指南", link: "/guide/introduction", activeMatch: "/guide/" },
       { text: "使用方法", link: "/guide/usage" },
       { text: "谱面格式", link: "/reference/chart-format" },

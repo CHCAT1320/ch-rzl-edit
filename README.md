@@ -2,6 +2,9 @@
 
 Rizline 谱面编辑器。支持线节点、Tap / Drag / Hold、Canvas 与 Camera 的 X/Y/缩放/旋转关键帧、BPM、Riztime 主题、线条/判定圈颜色和实时预览。
 
+- 在线编辑器：https://chcat1320.github.io/ch-rzl-edit/app/
+- 在线文档：https://chcat1320.github.io/ch-rzl-edit/
+
 ## 技术栈
 
 - TypeScript 5.6 + Vue 3 + Vue Router 4 + Canvas 2D
@@ -29,7 +32,7 @@ bun run tauri build
 
 ## 基本使用
 
-1. 导入音乐，或点击「新建谱面」并选择音乐。
+1. 在开始界面导入谱面与音乐，或点击「新建谱面」并选择音乐。
 2. 在 BPM 面板设置基础 BPM 与 BPM 变化。
 3. 在 `line&note` 模式下用 `R` 添加线节点，`Q` / `W` / `E` 添加 Tap / Drag / Hold。
 4. 切换编辑对象模式，编辑 Canvas / Camera 的 X、Y、缩放、旋转关键帧，以及 Riztime、线颜色与判定圈颜色。
@@ -75,10 +78,11 @@ bun run release:tag v0.2.0   # 指定标签，需与版本号一致
 
 ## CI 与发布
 
-- **文档**：`.github/workflows/docs.yml` 在推送到 `main` 时构建 VitePress 并部署到 GitHub Pages。
+- **文档**：`.github/workflows/docs.yml` 在推送到 `main` 时构建 VitePress 与 Web 版编辑器，并一起部署到 GitHub Pages。
+  - Web 版编辑器路径为 `<Pages 地址>/app/`，文档位于 Pages 根路径。
   - 首次使用需在仓库 **Settings → Pages → Build and deployment** 将 Source 设为 **GitHub Actions**。
   - base 会从 GitHub Pages 配置自动读取：项目站点为 `/<仓库名>/`，绑定自定义域名后为 `/`；如需强制覆盖，可设置仓库变量 `DOCS_BASE`。
-- **Release**：`.github/workflows/release.yml` 在推送 `v*` 或数字开头的 tag 时，于 `windows-latest` 构建 NSIS 安装包（`.exe`），并创建 **draft release** 上传产物。
+- **Release**：`.github/workflows/release.yml` 在推送 `v*` 或数字开头的 tag 时，于 `windows-latest` 构建 NSIS 安装包、MSI 安装包、便携版 ZIP 和校验和，并创建 **draft release** 上传产物。
 
 构建完成后到 GitHub Releases 检查草稿并手动发布。
 

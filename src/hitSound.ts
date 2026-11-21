@@ -19,8 +19,8 @@ async function loadBuffer(url: string): Promise<AudioBuffer> {
 
 export function preloadHitSounds(): Promise<void> {
   loadingPromise ??= Promise.all([
-    loadBuffer("/audio/hit.wav"),
-    loadBuffer("/audio/drag.wav"),
+    loadBuffer(`${import.meta.env.BASE_URL}audio/hit.wav`),
+    loadBuffer(`${import.meta.env.BASE_URL}audio/drag.wav`),
   ]).then(([tap, drag]) => {
     tapBuffer = tap;
     dragBuffer = drag;
