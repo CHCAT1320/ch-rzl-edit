@@ -2,11 +2,20 @@ import { reactive } from "vue";
 
 type DialogKind = "alert" | "confirm";
 
+export type DialogItemTone = "error" | "warn" | "info";
+
+export interface DialogItem {
+  tone: DialogItemTone;
+  path?: string;
+  message: string;
+}
+
 export interface DialogOptions {
   title?: string;
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  items?: DialogItem[];
 }
 
 interface DialogState {
@@ -17,6 +26,7 @@ interface DialogState {
   confirmText: string;
   cancelText: string;
   danger: boolean;
+  items: DialogItem[];
   resolve: ((value: boolean) => void) | null;
 }
 
@@ -28,6 +38,7 @@ export const dialogState = reactive<DialogState>({
   confirmText: "确定",
   cancelText: "取消",
   danger: false,
+  items: [],
   resolve: null,
 });
 
@@ -41,6 +52,7 @@ function openDialog(kind: DialogKind, message: string, options: DialogOptions): 
     dialogState.confirmText = options.confirmText ?? "确定";
     dialogState.cancelText = options.cancelText ?? "取消";
     dialogState.danger = options.danger ?? false;
+    dialogState.items = options.items ?? [];
     dialogState.resolve = resolve;
   });
 }

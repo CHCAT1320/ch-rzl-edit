@@ -15,9 +15,10 @@ function enterEditor(): void {
 }
 
 async function importChartAndMusic(): Promise<void> {
-  await loadChart();
-  if (!hasImportedChart()) return;
+  const result = await loadChart();
+  if (result === "blocked" || result === "cancelled") return;
   await loadMusic();
+  if (result === "forced") enterEditor();
 }
 
 onMounted(() => {

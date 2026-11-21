@@ -4,12 +4,19 @@ import { setChart, resetPlaybackState } from "./drawChart";
 import { setBeatChart } from "./editMode";
 import { applyMusicEndTicks, createEmptyCanvasMove, defaultEndTick, defaultKeyPoint, setEditorChart } from "./chartEditor";
 import { resumeHitSounds } from "./hitSound";
-import { showAlert } from "./dialog";
+import { showAlert, showConfirm, type DialogItem } from "./dialog";
+import {
+  describeJsonSyntaxError,
+  validateChartData,
+  type ChartValidationIssue,
+} from "./chartValidator";
 
 let chartData: unknown = null;
 let musicUrl: string | null = null;
 let currentMusicSrc: string | null = null;
 let chartImported = false;
+
+export type ChartLoadResult = "ok" | "forced" | "blocked" | "cancelled";
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -59,28 +66,187 @@ async function pickMusicPath(): Promise<string | null> {
   return null;
 }
 
-export async function loadChart(): Promise<void> {
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function defaultKeyPointList(value: number): Record<string, unknown>[] {
+  return [{ time: 0, value, easeType: 0, floorPosition: 0 }];
+}
+
+function defaultTheme(): Record<string, unknown> {
+  return {
+    colorsList: [
+      { r: 20, g: 20, b: 20, a: 255 },
+      { r: 255, g: 255, b: 255, a: 255 },
+      { r: 255, g: 255, b: 255, a: 255 },
+    ],
+  };
+}
+
+function coerceEase(value: Record<string, unknown>): void {
+  const ease = typeof value.easeType === "number" ? Math.trunc(value.easeType) : 1;
+  value.easeType = Number.isFinite(ease) && ease >= 0 && ease <= 18 ? ease : 1;
+}
+
+function coerceKeyPointEase(list: unknown): void {
+  if (!Array.isArray(list)) return;
+  for (const item of list) {
+    if (isRecordValue(item)) coerceEase(item);
+  }
+}
+
+function coerceNoteType(value: Record<string, unknown>): void {
+  const type = value.type;
+  if (type !== 0 && type !== 1 && type !== 2) value.type = 0;
+}
+
+function normalizeChartForEditor(value: unknown): void {
+  if (!isRecordValue(value)) return;
+  if (value.fileVersion !== 0 && value.fileVersion !== 1) value.fileVersion = 1;
+  const bpm = value.bPM ?? value.bpm;
+  value.bPM = typeof bpm === "number" && Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  if (!Array.isArray(value.bpmShifts)) value.bpmShifts = [];
+  if (!Array.isArray(value.lines)) value.lines = [];
+  if (!Array.isArray(value.canvasMoves) || value.canvasMoves.length === 0) {
+    value.canvasMoves = [createEmptyCanvasMove(0)];
+  }
+  if (!Array.isArray(value.themes) || value.themes.length === 0) {
+    value.themes = [defaultTheme()];
+  }
+  if (!isRecordValue(value.cameraMove)) value.cameraMove = {};
+  const cameraMove = value.cameraMove as Record<string, unknown>;
+  if (!Array.isArray(cameraMove.xPositionKeyPoints) || cameraMove.xPositionKeyPoints.length === 0) {
+    cameraMove.xPositionKeyPoints = defaultKeyPointList(0);
+  }
+  if (!Array.isArray(cameraMove.yPositionKeyPoints) || cameraMove.yPositionKeyPoints.length === 0) {
+    cameraMove.yPositionKeyPoints = defaultKeyPointList(0);
+  }
+  if (!Array.isArray(cameraMove.scaleKeyPoints) || cameraMove.scaleKeyPoints.length === 0) {
+    cameraMove.scaleKeyPoints = defaultKeyPointList(1);
+  }
+  if (!Array.isArray(cameraMove.rotationKeyPoints) || cameraMove.rotationKeyPoints.length === 0) {
+    cameraMove.rotationKeyPoints = defaultKeyPointList(0);
+  }
+  coerceKeyPointEase(value.bpmShifts);
+  coerceKeyPointEase(cameraMove.xPositionKeyPoints);
+  coerceKeyPointEase(cameraMove.yPositionKeyPoints);
+  coerceKeyPointEase(cameraMove.scaleKeyPoints);
+  coerceKeyPointEase(cameraMove.rotationKeyPoints);
+  for (const move of value.canvasMoves as unknown[]) {
+    if (!isRecordValue(move)) continue;
+    if (!Array.isArray(move.yPositionKeyPoints)) move.yPositionKeyPoints = defaultKeyPointList(0);
+    if (!Array.isArray(move.rotationKeyPoints)) move.rotationKeyPoints = defaultKeyPointList(0);
+    coerceKeyPointEase(move.xPositionKeyPoints);
+    coerceKeyPointEase(move.yPositionKeyPoints);
+    coerceKeyPointEase(move.speedKeyPoints);
+    coerceKeyPointEase(move.rotationKeyPoints);
+  }
+  for (const line of value.lines as unknown[]) {
+    if (!isRecordValue(line)) continue;
+    if (Array.isArray(line.linePoints)) {
+      for (const point of line.linePoints) {
+        if (isRecordValue(point)) coerceEase(point);
+      }
+    }
+    if (Array.isArray(line.notes)) {
+      for (const note of line.notes) {
+        if (isRecordValue(note)) coerceNoteType(note);
+      }
+    }
+  }
+}
+
+function issuesToDialogItems(issues: ChartValidationIssue[]): DialogItem[] {
+  const severityOrder = { error: 0, warn: 1, info: 2 } as const;
+  const ordered = [...issues].sort(
+    (left, right) => severityOrder[left.severity] - severityOrder[right.severity],
+  );
+  const visible = ordered.slice(0, 50);
+  const items: DialogItem[] = visible.map((issue) => ({
+    tone: issue.severity,
+    path: issue.path,
+    message: issue.message,
+  }));
+  if (ordered.length > visible.length) {
+    items.push({ tone: "info", message: `另有 ${ordered.length - visible.length} 项未显示` });
+  }
+  return items;
+}
+
+export async function loadChart(): Promise<ChartLoadResult> {
   let text = "";
   if (isTauri()) {
     const path = await pickChartPath();
-    if (!path) return;
+    if (!path) return "cancelled";
     text = await readTextFile(path);
   } else {
     const file = await selectFile(".json,application/json");
-    if (!file) return;
+    if (!file) return "cancelled";
     text = await file.text();
   }
 
+  let parsed: unknown;
   try {
-    chartData = JSON.parse(text);
-    setChart(chartData);
-    setBeatChart(chartData);
-    setEditorChart(chartData);
-    chartImported = true;
-    window.dispatchEvent(new CustomEvent("chartloaded", { detail: chartData }));
-    console.log(chartData);
-  } catch {
-    void showAlert("谱面文件不是有效的 JSON 文件");
+    parsed = JSON.parse(text);
+  } catch (error) {
+    await showAlert("", {
+      title: "谱面 JSON 语法错误",
+      items: [{ tone: "error", path: "JSON 语法", message: describeJsonSyntaxError(error, text) }],
+    });
+    return "blocked";
+  }
+
+  const issues = validateChartData(parsed);
+  const errors = issues.filter((issue) => issue.severity === "error");
+  const warnings = issues.filter((issue) => issue.severity === "warn");
+  if (errors.length > 0) {
+    if (!isRecordValue(parsed)) {
+      await showAlert("谱面顶层不是 JSON 对象，无法强制载入。", {
+        title: "谱面格式错误",
+        items: issuesToDialogItems(issues),
+      });
+      return "blocked";
+    }
+    const warningText = warnings.length > 0 ? `，${warnings.length} 个警告` : "";
+    const force = await showConfirm(
+      "存在格式错误。你可以取消，或强制进入编辑器；不兼容字段会自动修正。",
+      {
+        title: `谱面格式错误（${errors.length} 个错误${warningText}）`,
+        confirmText: "强制进入",
+        cancelText: "取消",
+        danger: true,
+        items: issuesToDialogItems(issues),
+      },
+    );
+    if (!force) return "blocked";
+    try {
+      applyChart(sanitizeForExport(parsed));
+      return "forced";
+    } catch (error) {
+      resetSession();
+      const reason = error instanceof Error ? error.message : String(error);
+      await showAlert(`谱面加载失败：${reason}`, { title: "导入失败" });
+      return "blocked";
+    }
+  }
+  if (warnings.length > 0) {
+    await showAlert("以下问题不影响进入编辑器。", {
+      title: `谱面格式警告（${warnings.length} 项，可继续编辑）`,
+      items: issuesToDialogItems(warnings),
+    });
+  }
+
+  normalizeChartForEditor(parsed);
+
+  try {
+    applyChart(parsed);
+    return "ok";
+  } catch (error) {
+    resetSession();
+    const reason = error instanceof Error ? error.message : String(error);
+    await showAlert(`谱面加载失败：${reason}`, { title: "导入失败" });
+    return "blocked";
   }
 }
 
@@ -139,7 +305,6 @@ function applyChart(data: unknown): void {
   setEditorChart(chartData);
   chartImported = true;
   window.dispatchEvent(new CustomEvent("chartloaded", { detail: chartData }));
-  console.log("已创建基础谱面", chartData);
 }
 
 export async function newChart(): Promise<void> {
@@ -156,13 +321,10 @@ export async function newChart(): Promise<void> {
   await applyMusicFile(musicFile);
 }
 
-function bindAudioElement(src: string): void {
+function applyMusicElement(): void {
   const audio = document.querySelector<HTMLAudioElement>("#audio");
-  if (!audio) return;
-  if (musicUrl) URL.revokeObjectURL(musicUrl);
-  musicUrl = src.startsWith("blob:") ? src : null;
-  currentMusicSrc = src;
-  audio.src = src;
+  if (!audio || !currentMusicSrc || audio.getAttribute("src") === currentMusicSrc) return;
+  audio.src = currentMusicSrc;
   audio.classList.remove("audioDisabled");
   audio.removeAttribute("aria-disabled");
   audio.addEventListener("loadedmetadata", () => {
@@ -171,16 +333,15 @@ function bindAudioElement(src: string): void {
   audio.load();
 }
 
+function bindAudioElement(src: string): void {
+  if (musicUrl) URL.revokeObjectURL(musicUrl);
+  musicUrl = src.startsWith("blob:") ? src : null;
+  currentMusicSrc = src;
+  applyMusicElement();
+}
+
 export function restoreMusicElement(): void {
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  if (!audio || !currentMusicSrc || audio.src) return;
-  audio.src = currentMusicSrc;
-  audio.classList.remove("audioDisabled");
-  audio.removeAttribute("aria-disabled");
-  audio.addEventListener("loadedmetadata", () => {
-    applyMusicEndTicks();
-  }, { once: true });
-  audio.load();
+  applyMusicElement();
 }
 
 function musicMimeType(path: string): string {
@@ -244,12 +405,22 @@ function sanitizeColor(value: unknown, fallbackA = 255): { r: number; g: number;
   };
 }
 
+function sanitizeEase(value: unknown): number {
+  const ease = Math.trunc(finiteNumber(value, 1));
+  return ease >= 0 && ease <= 18 ? ease : 1;
+}
+
+function sanitizeNoteType(value: unknown): number {
+  const type = Math.trunc(finiteNumber(value, 0));
+  return type === 1 || type === 2 ? type : 0;
+}
+
 function keyPoint(source: unknown, fallbackValue: number): Record<string, unknown> {
   const point = (source && typeof source === "object") ? source as Record<string, unknown> : {};
   return {
     time: Math.max(0, finiteNumber(point.time, 0)),
     value: finiteNumber(point.value, fallbackValue),
-    easeType: Math.trunc(finiteNumber(point.easeType, 0)),
+    easeType: sanitizeEase(point.easeType),
     floorPosition: finiteNumber(point.floorPosition, 0),
   };
 }
@@ -257,7 +428,10 @@ function keyPoint(source: unknown, fallbackValue: number): Record<string, unknow
 function ensureKeyPoints(points: unknown, fallbackValue: number, endTick: number): Record<string, unknown>[] {
   const list = Array.isArray(points) ? points.map((point) => keyPoint(point, fallbackValue)) : [];
   if (list.length === 0) {
-    return [keyPoint({ time: 0, value: fallbackValue }, fallbackValue), keyPoint({ time: endTick, value: fallbackValue }, fallbackValue)];
+    return [
+      keyPoint({ time: 0, value: fallbackValue, easeType: 0 }, fallbackValue),
+      keyPoint({ time: endTick, value: fallbackValue, easeType: 0 }, fallbackValue),
+    ];
   }
   if (list.length === 1) {
     const first = list[0];
@@ -279,9 +453,10 @@ function sanitizeForExport(value: unknown): unknown {
   const canvasMoves = Array.isArray(chart.canvasMoves) && chart.canvasMoves.length > 0 ? chart.canvasMoves : [createEmptyCanvasMove(0)];
   const lastCanvas = Math.max(0, canvasMoves.length - 1);
 
-  chart.fileVersion = Math.trunc(finiteNumber(chart.fileVersion, 1));
+  chart.fileVersion = chart.fileVersion === 0 || chart.fileVersion === 1 ? chart.fileVersion : 1;
   chart.songsName = typeof chart.songsName === "string" ? chart.songsName : "";
-  chart.bPM = Math.max(1, finiteNumber(chart.bPM ?? chart.bpm, 120));
+  const bpm = finiteNumber(chart.bPM ?? chart.bpm, 120);
+  chart.bPM = bpm >= 1 ? bpm : 120;
   chart.offset = finiteNumber(chart.offset, 0);
   chart.bpmShifts = Array.isArray(chart.bpmShifts)
     ? chart.bpmShifts.map((point) => keyPoint(point, 1))
@@ -342,7 +517,7 @@ function sanitizeForExport(value: unknown): unknown {
                 time: Math.max(0, finiteNumber(node.time, 0)),
                 xPosition: finiteNumber(node.xPosition, 0),
                 canvasIndex: Math.max(0, Math.min(lastCanvas, Math.trunc(finiteNumber(node.canvasIndex, 0)))),
-                easeType: Math.trunc(finiteNumber(node.easeType, 0)),
+                easeType: sanitizeEase(node.easeType),
                 floorPosition: finiteNumber(node.floorPosition, 0),
                 color: sanitizeColor(node.color),
               };
@@ -350,14 +525,15 @@ function sanitizeForExport(value: unknown): unknown {
             notes: notes.map((note) => {
               const itemNote = (note && typeof note === "object") ? note as Record<string, unknown> : {};
               const infos = Array.isArray(itemNote.otherInformations) ? itemNote.otherInformations.map((info) => finiteNumber(info, 0)) : [];
-              if (Math.trunc(finiteNumber(itemNote.type, 0)) === 2) {
+              const noteType = sanitizeNoteType(itemNote.type);
+              if (noteType === 2) {
                 infos[0] = Math.max(finiteNumber(itemNote.time, 0), finiteNumber(infos[0], finiteNumber(itemNote.time, 0)));
                 infos[1] = Math.max(0, Math.min(lastCanvas, Math.trunc(finiteNumber(infos[1], 0))));
                 infos[2] = finiteNumber(infos[2], 0);
               }
               return {
                 ...itemNote,
-                type: Math.trunc(finiteNumber(itemNote.type, 0)),
+                type: noteType,
                 time: Math.max(0, finiteNumber(itemNote.time, 0)),
                 floorPosition: finiteNumber(itemNote.floorPosition, 0),
                 otherInformations: infos,
