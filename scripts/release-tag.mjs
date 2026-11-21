@@ -13,7 +13,8 @@ function fail(message) {
 }
 
 function git(args, options = {}) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8", ...options }).trim();
+  const output = execFileSync("git", args, { cwd: root, encoding: "utf8", ...options });
+  return typeof output === "string" ? output.trim() : "";
 }
 
 function currentVersion() {
