@@ -24,13 +24,21 @@ export function preloadHitSounds(): Promise<void> {
   ]).then(([tap, drag]) => {
     tapBuffer = tap;
     dragBuffer = drag;
+  }, (error) => {
+    // Allow a later gesture to retry instead of caching the failure forever.
+    loadingPromise = null;
+    throw error;
   });
   return loadingPromise;
 }
 
 export async function resumeHitSounds(): Promise<void> {
   const context = getAudioContext();
-  if (context.state === "suspended") await context.resume();
+  if (context.state === "suspended") {
+    // Without a user gesture the browser keeps `resume()` pending forever, so
+    // never await it: callers (music import, preview) must not be blocked.
+    void context.resume().catch(() => {});
+  }
   await preloadHitSounds();
 }
 

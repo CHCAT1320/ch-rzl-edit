@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { exportChart } from "../fileManager";
+import { exportChart, loadMusic } from "../fileManager";
 
 const emit = defineEmits<{
   (event: "back"): void;
 }>();
+
+function importMusic(): void {
+  void loadMusic();
+}
 </script>
 
 <template>
   <header>
     <button class="simpleButton headerLink" type="button" @click="emit('back')">返回</button>
+    <button class="simpleButton" type="button" @click="importMusic">导入音乐</button>
     <label class="headerCanvasControl" for="editingCanvasIndex">
       <span>当前 Canvas</span>
       <input id="editingCanvasIndex" type="number" min="0" max="99" step="1" value="0" />

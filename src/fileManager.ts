@@ -4,6 +4,7 @@ import { setChart, resetPlaybackState } from "./drawChart";
 import { setBeatChart } from "./editMode";
 import { applyMusicEndTicks, createEmptyCanvasMove, defaultEndTick, defaultKeyPoint, setEditorChart } from "./chartEditor";
 import { resumeHitSounds } from "./hitSound";
+import { getPlaybackSeconds, resetPlaybackClock, seekPlaybackSeconds } from "./playback";
 import { showAlert, showConfirm, type DialogItem } from "./dialog";
 import {
   describeJsonSyntaxError,
@@ -22,27 +23,36 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 }
 
-function selectFile(accept: string): Promise<File | null> {
+function pickFiles(accept: string, multiple: boolean): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
+    input.multiple = multiple;
+    input.style.display = "none";
     let settled = false;
-    const finish = (file: File | null) => {
+    const finish = (files: File[]) => {
       if (settled) return;
       settled = true;
-      resolve(file);
       input.remove();
       window.removeEventListener("focus", onFocus);
+      resolve(files);
     };
     const onFocus = () => {
-      window.setTimeout(() => finish(input.files?.[0] ?? null), 300);
+      window.setTimeout(() => finish(Array.from(input.files ?? [])), 300);
     };
-    input.addEventListener("change", () => finish(input.files?.[0] ?? null), { once: true });
-    input.addEventListener("cancel", () => finish(null), { once: true });
+    input.addEventListener("change", () => finish(Array.from(input.files ?? [])), { once: true });
+    input.addEventListener("cancel", () => finish([]), { once: true });
     window.addEventListener("focus", onFocus, { once: true });
+    // Some browsers ignore a file picker on an input that is not in the document.
+    document.body.append(input);
     input.click();
   });
+}
+
+async function selectFile(accept: string): Promise<File | null> {
+  const files = await pickFiles(accept, false);
+  return files[0] ?? null;
 }
 
 async function pickChartPath(): Promise<string | null> {
@@ -185,7 +195,10 @@ export async function loadChart(): Promise<ChartLoadResult> {
     if (!file) return "cancelled";
     text = await file.text();
   }
+  return applyChartText(text);
+}
 
+async function applyChartText(text: string): Promise<ChartLoadResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -268,6 +281,7 @@ export function resetSession(): void {
   currentMusicSrc = null;
   chartData = null;
   chartImported = false;
+  resetPlaybackClock();
   setChart(null);
   setBeatChart(null);
   setEditorChart(null);
@@ -324,11 +338,15 @@ export async function newChart(): Promise<void> {
 function applyMusicElement(): void {
   const audio = document.querySelector<HTMLAudioElement>("#audio");
   if (!audio || !currentMusicSrc || audio.getAttribute("src") === currentMusicSrc) return;
+  // Keep the current editing position when a music file is added or replaced,
+  // so importing music no longer jumps the timeline back to 0.
+  const resumeAt = getPlaybackSeconds();
   audio.src = currentMusicSrc;
   audio.classList.remove("audioDisabled");
   audio.removeAttribute("aria-disabled");
   audio.addEventListener("loadedmetadata", () => {
     applyMusicEndTicks();
+    seekPlaybackSeconds(resumeAt);
   }, { once: true });
   audio.load();
 }
@@ -357,9 +375,6 @@ function musicMimeType(path: string): string {
 }
 
 async function applyMusicPath(path: string): Promise<void> {
-  await resumeHitSounds().catch((error: unknown) => {
-    console.error("打击音效初始化失败", error);
-  });
   try {
     const bytes = await readFile(path);
     const blob = new Blob([bytes], { type: musicMimeType(path) });
@@ -367,14 +382,19 @@ async function applyMusicPath(path: string): Promise<void> {
   } catch (error) {
     console.error("音乐导入失败", error);
     void showAlert("音乐导入失败，请重试或换一个音频文件");
+    return;
   }
+  // Hit sounds are optional: initialising them must never delay or block the music.
+  void resumeHitSounds().catch((error: unknown) => {
+    console.error("打击音效初始化失败", error);
+  });
 }
 
 async function applyMusicFile(file: File): Promise<void> {
-  await resumeHitSounds().catch((error: unknown) => {
+  bindAudioElement(URL.createObjectURL(file));
+  void resumeHitSounds().catch((error: unknown) => {
     console.error("打击音效初始化失败", error);
   });
-  bindAudioElement(URL.createObjectURL(file));
 }
 
 export async function loadMusic(): Promise<void> {
@@ -387,6 +407,33 @@ export async function loadMusic(): Promise<void> {
   const file = await selectFile("audio/*");
   if (!file) return;
   await applyMusicFile(file);
+}
+
+/**
+ * Start-page import. Browsers only honour a programmatic file picker while the
+ * page still holds a recent user gesture, so chaining two pickers after an
+ * `await` silently drops the second one. In the browser we therefore open a
+ * single multi-select picker that accepts both the chart and the music.
+ */
+export async function importChartAndMusic(): Promise<ChartLoadResult> {
+  if (isTauri()) {
+    const result = await loadChart();
+    if (result === "ok" || result === "forced") await loadMusic();
+    return result;
+  }
+
+  const files = await pickFiles(".json,application/json,audio/*", true);
+  if (files.length === 0) return "cancelled";
+  const chartFile = files.find((file) => /\.json$/i.test(file.name));
+  if (!chartFile) {
+    await showAlert("请选择谱面 JSON 文件，可同时选择音乐文件。", { title: "未选择谱面" });
+    return "cancelled";
+  }
+  const result = await applyChartText(await chartFile.text());
+  if (result !== "ok" && result !== "forced") return result;
+  const musicFile = files.find((file) => file !== chartFile);
+  if (musicFile) await applyMusicFile(musicFile);
+  return result;
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {

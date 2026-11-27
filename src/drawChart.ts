@@ -2,6 +2,7 @@ import { calculateCenterSize, MONO_FONT_STACK } from "./canvas";
 import { editorCanvasTransform, getEditorVisualState } from "./chartEditor";
 import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
+import { getPlaybackSeconds } from "./playback";
 
 interface ChartColor {
   r?: number;
@@ -87,7 +88,6 @@ interface Point {
 
 const DESIGN_WIDTH = 720;
 const DESIGN_HEIGHT = 1280;
-const AUDIO_ID = "audio";
 
 const easeFunctions: Array<(value: number) => number> = [
   (x) => x,
@@ -1278,8 +1278,7 @@ function drawSideMasks(
 }
 
 function seconds(): number {
-  const audio = document.querySelector<HTMLAudioElement>(`#${AUDIO_ID}`);
-  return audio?.src ? audio.currentTime : 0;
+  return getPlaybackSeconds();
 }
 
 export function setChart(value: unknown): void {
@@ -1303,15 +1302,13 @@ export function refreshChart(): void {
 }
 
 export function resetPlaybackState(): void {
-  const audio = document.querySelector<HTMLAudioElement>(`#${AUDIO_ID}`);
-  lastAudioTime = audio?.src ? audio.currentTime : 0;
+  lastAudioTime = getPlaybackSeconds();
   hitEffects = [];
   playedNotes.clear();
 }
 
 export function suppressHitEffects(): void {
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  const current = audio?.src ? audio.currentTime : 0;
+  const current = getPlaybackSeconds();
   lastAudioTime = current;
   hitEffects = [];
   playedNotes.clear();
@@ -1328,8 +1325,6 @@ export function setSpeed(value: number): void {
 export function drawChart(): void {
   const canvas = document.querySelector<HTMLCanvasElement>("#cvs");
   if (!canvas || !chart) return;
-  const audio = document.querySelector<HTMLAudioElement>(`#${AUDIO_ID}`);
-  if (!audio?.src) return;
   const context = canvas.getContext("2d");
   if (!context) return;
   const bounds = canvas.getBoundingClientRect();

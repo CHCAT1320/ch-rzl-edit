@@ -1,6 +1,7 @@
 type Color = { r?: number; g?: number; b?: number; a?: number };
 import { beatTickToSeconds, getEditTimeY, getEditorXOffset, getVerticalDensity, isEditMode } from "./editMode";
 import { isDialogOpen, showAlert } from "./dialog";
+import { getPlaybackSeconds, isPlaying, pausePlayback, seekPlaybackSeconds } from "./playback";
 type Point = { time: number; xPosition: number; color: Color; easeType?: number; canvasIndex: number; floorPosition?: number };
 type Note = { type: number; time: number; floorPosition?: number; otherInformations?: number[] };
 type ColorPoint = { time: number; startColor: Color; endColor: Color };
@@ -666,7 +667,7 @@ function snapX(value: number): number {
 }
 
 function currentTime(): number {
-  return document.querySelector<HTMLAudioElement>("#audio")?.currentTime ?? 0;
+  return getPlaybackSeconds();
 }
 
 function secondsToTick(seconds: number): number {
@@ -869,8 +870,7 @@ function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fa
 }
 
 function audioPlaying(): boolean {
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  return !!audio && !audio.paused && !audio.ended && !audio.seeking;
+  return isPlaying();
 }
 
 export function editorCanvasTransform(position: { x: number; y: number }, canvasIndex: number, seconds: number, viewportScale: number): { x: number; y: number } {
@@ -1454,13 +1454,11 @@ export function setupChartEditor(): () => void {
   };
   window.addEventListener("mouseup", handleWindowMouseUp);
   canvas.addEventListener("wheel", (event) => {
-    const audio = document.querySelector<HTMLAudioElement>("#audio");
-    if (!audio?.src) return;
+    if (!chart) return;
     event.preventDefault();
-    audio.pause();
+    pausePlayback();
     const step = 60 / ((Number((chart as EditorChart & { bPM?: number } | null)?.bPM) || 120) * Math.max(1, Number(document.querySelector<HTMLInputElement>("#beatDensity")?.value) || 1));
-    const duration = Number.isFinite(audio.duration) ? audio.duration : Number.POSITIVE_INFINITY;
-    audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime - Math.sign(event.deltaY) * step));
+    seekPlaybackSeconds(getPlaybackSeconds() - Math.sign(event.deltaY) * step);
     window.dispatchEvent(new Event("editorseek"));
   }, { passive: false });
   document.querySelector("#applyProperty")?.addEventListener("click", applyProperties);

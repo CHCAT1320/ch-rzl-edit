@@ -1,4 +1,5 @@
 import { MONO_FONT_STACK } from "./canvas";
+import { getPlaybackSeconds } from "./playback";
 
 let previewMode = false;
 let editModeEnabled = true;
@@ -121,8 +122,7 @@ function drawBeatLines(
   playfieldWidth: number,
   height: number,
 ): void {
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  const currentTime = audio?.src ? audio.currentTime : 0;
+  const currentTime = getPlaybackSeconds();
   const density = getBeatDensity();
   const viewportScale = Math.min(playfieldWidth / 720, height / 1280);
   const ringY = height * 0.74;

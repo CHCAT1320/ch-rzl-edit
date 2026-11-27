@@ -14,6 +14,7 @@ import { onBeforeRouteLeave, useRouter } from "vue-router";
 import { restoreMusicElement, resetSession, hasImportedChart } from "../fileManager";
 import { isDialogOpen, showConfirm } from "../dialog";
 import { preloadHitSounds, resumeHitSounds } from "../hitSound";
+import { getPlaybackSeconds, pausePlayback, seekPlaybackSeconds, startPlayback, togglePlayback } from "../playback";
 import EditorHeader from "../components/EditorHeader.vue";
 import EditorSidebar from "../components/EditorSidebar.vue";
 
@@ -54,10 +55,9 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (isDialogOpen()) return;
   if (event.code === "Space") {
     event.preventDefault();
-    const audio = document.querySelector<HTMLAudioElement>("#audio");
-    if (!audio?.src) return;
-    if (audio.paused) void audio.play();
-    else audio.pause();
+    // Keep the hit-sound context inside the gesture, but never block playback on it.
+    void resumeHitSounds().catch(() => {});
+    togglePlayback();
     return;
   }
 
@@ -80,22 +80,19 @@ function handleKeyDown(event: KeyboardEvent): void {
   if (event.code === "KeyT") {
     event.preventDefault();
     if (event.repeat || previewStartTime !== null) return;
-    const audio = document.querySelector<HTMLAudioElement>("#audio");
-    previewStartTime = audio?.src ? audio.currentTime : 0;
+    previewStartTime = getPlaybackSeconds();
     setPreviewMode(true);
-    if (audio?.src) void audio.play();
+    void resumeHitSounds().catch(() => {});
+    startPlayback();
     drawChart();
   }
 }
 
 function endPreview(): void {
   if (previewStartTime === null) return;
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  if (audio?.src) {
-    audio.pause();
-    audio.currentTime = previewStartTime;
-    resetPlaybackState();
-  }
+  pausePlayback();
+  seekPlaybackSeconds(previewStartTime);
+  resetPlaybackState();
   previewStartTime = null;
   setPreviewMode(false);
   drawChart();

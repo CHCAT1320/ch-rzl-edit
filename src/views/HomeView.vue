@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { hasImportedChart, loadChart, loadMusic, newChart } from "../fileManager";
+import { hasImportedChart, importChartAndMusic, newChart } from "../fileManager";
 
 const router = useRouter();
 const chartImported = ref(hasImportedChart());
@@ -14,10 +14,9 @@ function enterEditor(): void {
   void router.push("/editor");
 }
 
-async function importChartAndMusic(): Promise<void> {
-  const result = await loadChart();
+async function importChartAndMusicFiles(): Promise<void> {
+  const result = await importChartAndMusic();
   if (result === "blocked" || result === "cancelled") return;
-  await loadMusic();
   if (result === "forced") enterEditor();
 }
 
@@ -43,7 +42,7 @@ onBeforeUnmount(() => {
         <button
           class="simpleButton startButton"
           type="button"
-          @click="importChartAndMusic"
+          @click="importChartAndMusicFiles"
         >
           导入谱面与音乐
         </button>
