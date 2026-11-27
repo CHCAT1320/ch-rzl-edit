@@ -999,26 +999,36 @@ function drawStageBackground(
 }
 
 /**
- * A hairline keeps the 9:16 stage readable now that it shares the chart colour.
- * Drawn after the edit overlay so the frosted blur cannot smear it.
+ * Two thick markers on the left/right edge of the 9:16 stage, so it is easy to
+ * see where the playfield ends. Drawn after the edit overlay so the frosted
+ * blur cannot smear them.
  */
 function drawStageEdges(
   context: CanvasRenderingContext2D,
+  themeIndex: number,
   surfaceWidth: number,
   surfaceHeight: number,
   top: number,
   playfieldWidth: number,
 ): void {
+  const background = themeColor(themeIndex, 0, { r: 0, g: 0, b: 0, a: 255 });
+  const luminance = (number(background.r) * 0.299 + number(background.g) * 0.587 + number(background.b) * 0.114) / 255;
+  const barWidth = 8;
+  const inset = Math.min(surfaceHeight * 0.06, 48);
+  const height = Math.max(0, surfaceHeight - inset * 2);
+  if (height <= 0) return;
+  // Sit half inside / half outside the boundary so the markers stay visible
+  // even when the window is exactly 9:16 and there is no letterbox at all.
+  const left = -playfieldWidth / 2 - barWidth / 2;
+  const right = playfieldWidth / 2 - barWidth / 2;
+  context.fillStyle = luminance > 0.55 ? "rgba(0, 0, 0, 0.24)" : "rgba(255, 255, 255, 0.24)";
+  context.fillRect(left, top + inset, barWidth, height);
+  context.fillRect(right, top + inset, barWidth, height);
+  // Quiet hairline for the rest of the stage edge, keeping the frame readable.
   if (surfaceWidth <= playfieldWidth + 2) return;
-  const edge = 0.5;
-  context.strokeStyle = "rgba(255, 255, 255, 0.09)";
-  context.lineWidth = 1;
-  context.beginPath();
-  context.moveTo(-playfieldWidth / 2 + edge, top);
-  context.lineTo(-playfieldWidth / 2 + edge, top + surfaceHeight);
-  context.moveTo(playfieldWidth / 2 - edge, top);
-  context.lineTo(playfieldWidth / 2 - edge, top + surfaceHeight);
-  context.stroke();
+  context.fillStyle = luminance > 0.55 ? "rgba(0, 0, 0, 0.10)" : "rgba(255, 255, 255, 0.07)";
+  context.fillRect(-playfieldWidth / 2, top, 1, surfaceHeight);
+  context.fillRect(playfieldWidth / 2 - 1, top, 1, surfaceHeight);
 }
 
 function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): void {
@@ -1437,7 +1447,8 @@ export function drawChart(): void {
   // Editor HUD stays crisp: it must not be swallowed by the frosted backdrop.
   drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
   drawFps(context, scale);
-  drawStageEdges(context, bounds.width, bounds.height - center.y, -center.y, center.width);
+  const stageTheme = transitionIndex >= 0 ? challengeBaseTheme(transitionIndex) : activeTheme;
+  drawStageEdges(context, stageTheme, bounds.width, bounds.height - center.y, -center.y, center.width);
   drawEditorObjects(context, currentSeconds, scale);
   drawEditorKeyFrames(context, currentSeconds, scale);
   drawEditorInteraction(context, currentSeconds, scale);
