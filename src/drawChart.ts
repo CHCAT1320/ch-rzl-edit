@@ -982,6 +982,45 @@ function drawThemeBackground(context: CanvasRenderingContext2D, themeIndex: numb
   context.fillRect(-width / 2, 0, width, height);
 }
 
+/**
+ * Paints the whole viewport with the chart's own background colour, so the
+ * letterbox around the 9:16 stage is no longer a forced black band.
+ */
+function drawStageBackground(
+  context: CanvasRenderingContext2D,
+  themeIndex: number,
+  surfaceWidth: number,
+  surfaceHeight: number,
+  top: number,
+): void {
+  const background = themeColor(themeIndex, 0, { r: 0, g: 0, b: 0, a: 255 });
+  context.fillStyle = color({ ...background, a: 255 });
+  context.fillRect(-surfaceWidth / 2, top, surfaceWidth, surfaceHeight);
+}
+
+/**
+ * A hairline keeps the 9:16 stage readable now that it shares the chart colour.
+ * Drawn after the edit overlay so the frosted blur cannot smear it.
+ */
+function drawStageEdges(
+  context: CanvasRenderingContext2D,
+  surfaceWidth: number,
+  surfaceHeight: number,
+  top: number,
+  playfieldWidth: number,
+): void {
+  if (surfaceWidth <= playfieldWidth + 2) return;
+  const edge = 0.5;
+  context.strokeStyle = "rgba(255, 255, 255, 0.09)";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(-playfieldWidth / 2 + edge, top);
+  context.lineTo(-playfieldWidth / 2 + edge, top + surfaceHeight);
+  context.moveTo(playfieldWidth / 2 - edge, top);
+  context.lineTo(playfieldWidth / 2 - edge, top + surfaceHeight);
+  context.stroke();
+}
+
 function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): void {
   if (line.linePoints.length === 0) return;
   const lineColor = currentColor(seconds, line.lineColor);
@@ -1264,19 +1303,6 @@ function drawFps(context: CanvasRenderingContext2D, viewportScale: number): void
   context.restore();
 }
 
-function drawSideMasks(
-  context: CanvasRenderingContext2D,
-  canvasWidth: number,
-  canvasHeight: number,
-  centerWidth: number,
-): void {
-  const sideWidth = Math.max(0, (canvasWidth - centerWidth) / 2);
-  if (sideWidth === 0) return;
-  context.fillStyle = "rgba(0, 0, 0, 0.35)";
-  context.fillRect(-canvasWidth / 2, 0, sideWidth, canvasHeight);
-  context.fillRect(centerWidth / 2, 0, sideWidth, canvasHeight);
-}
-
 function seconds(): number {
   return getPlaybackSeconds();
 }
@@ -1362,13 +1388,20 @@ export function drawChart(): void {
   context.clearRect(0, 0, bounds.width, bounds.height);
   context.translate(centerX, center.y);
   const activeTheme = state.active > 0 ? state.active : 0;
+  const transitionIndex = state.transition ? chart.challengeTimes?.indexOf(state.transition) ?? -1 : -1;
+  drawStageBackground(
+    context,
+    transitionIndex >= 0 ? challengeBaseTheme(transitionIndex) : activeTheme,
+    bounds.width,
+    bounds.height,
+    -center.y,
+  );
   if (!state.transition) {
     drawThemeBackground(context, activeTheme, center.width, center.height);
     drawScene(context, currentSeconds, scale, cameraScale, cameraX, activeTheme);
   }
 
   if (state.transition && chart.challengeTimes) {
-    const transitionIndex = chart.challengeTimes.findIndex((challenge) => challenge === state.transition);
     const challengeIndex = transitionIndex + 1;
     const baseThemeIndex = challengeBaseTheme(transitionIndex);
     // Draw the scene that remains visible outside the transition circle.
@@ -1399,11 +1432,12 @@ export function drawChart(): void {
     themeColor(activeTheme, 2, { r: 255, g: 255, b: 255, a: 255 }),
     activeTheme > 0,
   );
-  drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
   drawCombo(context, scale);
-  drawFps(context, scale);
-  drawSideMasks(context, bounds.width, bounds.height - center.y, center.width);
   drawEditOverlay(context, bounds.width, bounds.height - center.y, center.width);
+  // Editor HUD stays crisp: it must not be swallowed by the frosted backdrop.
+  drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
+  drawFps(context, scale);
+  drawStageEdges(context, bounds.width, bounds.height - center.y, -center.y, center.width);
   drawEditorObjects(context, currentSeconds, scale);
   drawEditorKeyFrames(context, currentSeconds, scale);
   drawEditorInteraction(context, currentSeconds, scale);
@@ -1417,18 +1451,26 @@ function drawEditorInteraction(
 ): void {
   const state = getEditorVisualState();
   if (!isEditMode()) return;
+  // Overlays that live in canvas space must follow the same Canvas transform as
+  // the objects they sit on, otherwise the box/paste ghost drifts away from them.
+  const place = (x: number, time: number, inCanvasSpace: boolean): Point => {
+    const raw = {
+      x: (x + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
+      y: getEditTimeY(tickToSeconds(time), seconds, DESIGN_HEIGHT * viewportScale),
+    };
+    return inCanvasSpace ? editorCanvasTransform(raw, state.canvasIndex, seconds, viewportScale) : raw;
+  };
   if (state.marquee) {
-    const x0 = (state.marquee.x0 + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
-    const x1 = (state.marquee.x1 + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
-    const y0 = getEditTimeY(tickToSeconds(state.marquee.time0), seconds, DESIGN_HEIGHT * viewportScale);
-    const y1 = getEditTimeY(tickToSeconds(state.marquee.time1), seconds, DESIGN_HEIGHT * viewportScale);
-    const x = Math.min(x0, x1);
-    const y = Math.min(y0, y1);
+    const canvasSpace = state.mode === "lineNote";
+    const p0 = place(state.marquee.x0, state.marquee.time0, canvasSpace);
+    const p1 = place(state.marquee.x1, state.marquee.time1, canvasSpace);
+    const x = Math.min(p0.x, p1.x);
+    const y = Math.min(p0.y, p1.y);
     context.strokeStyle = "rgba(80, 180, 255, 0.95)";
     context.fillStyle = "rgba(80, 180, 255, 0.18)";
     context.lineWidth = 1;
-    context.fillRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
-    context.strokeRect(x, y, Math.abs(x1 - x0), Math.abs(y1 - y0));
+    context.fillRect(x, y, Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y));
+    context.strokeRect(x, y, Math.abs(p1.x - p0.x), Math.abs(p1.y - p0.y));
   }
   const preview = state.pastePreview;
   if (!preview) return;
@@ -1437,31 +1479,33 @@ function drawEditorInteraction(
   context.fillStyle = "#9fd7ff";
   context.strokeStyle = "#9fd7ff";
   context.lineWidth = Math.max(1, 3 * viewportScale);
-  const drawX = (x: number) => (x + getEditorXOffset()) * DESIGN_WIDTH * viewportScale;
-  const drawY = (time: number) => getEditTimeY(tickToSeconds(time), seconds, DESIGN_HEIGHT * viewportScale);
+  const canvasSpace = preview.kind === "lineNote";
+  const drawX = (x: number, time: number) => place(x, time, canvasSpace);
   for (const line of preview.lines) {
     for (let index = 1; index < line.points.length; index += 1) {
       const start = line.points[index - 1];
       const end = line.points[index];
+      const startPoint = drawX(start.xPosition, start.time);
+      const endPoint = drawX(end.xPosition, end.time);
       context.beginPath();
-      context.moveTo(drawX(start.xPosition), drawY(start.time));
-      context.lineTo(drawX(end.xPosition), drawY(end.time));
+      context.moveTo(startPoint.x, startPoint.y);
+      context.lineTo(endPoint.x, endPoint.y);
       context.stroke();
     }
     for (const point of line.points) {
+      const position = drawX(point.xPosition, point.time);
       context.beginPath();
-      context.arc(drawX(point.xPosition), drawY(point.time), 6, 0, Math.PI * 2);
+      context.arc(position.x, position.y, 6, 0, Math.PI * 2);
       context.fill();
     }
     for (const note of line.notes) {
-      const noteX = note.previewX;
-      const noteY = drawY(note.time);
+      const head = drawX(note.previewX, note.time);
       context.beginPath();
-      context.arc(drawX(noteX), noteY, 8, 0, Math.PI * 2);
+      context.arc(head.x, head.y, 8, 0, Math.PI * 2);
       context.stroke();
       if (note.type === 2 && note.otherInformations?.length) {
-        const tailY = drawY(note.otherInformations[0]);
-        context.strokeRect(drawX(noteX) - 8, Math.min(noteY, tailY), 16, Math.abs(tailY - noteY));
+        const tail = drawX(note.previewX, note.otherInformations[0]);
+        context.strokeRect(head.x - 8, Math.min(head.y, tail.y), 16, Math.abs(tail.y - head.y));
       }
     }
   }
@@ -1470,15 +1514,18 @@ function drawEditorInteraction(
     const end = preview.keys[index];
     const startX = (preview.kind === "canvasSpeed" || preview.kind === "cameraScale") ? start.value / 20 : start.value;
     const endX = (preview.kind === "canvasSpeed" || preview.kind === "cameraScale") ? end.value / 20 : end.value;
+    const startPoint = drawX(startX, start.time);
+    const endPoint = drawX(endX, end.time);
     context.beginPath();
-    context.moveTo(drawX(startX), drawY(start.time));
-    context.lineTo(drawX(endX), drawY(end.time));
+    context.moveTo(startPoint.x, startPoint.y);
+    context.lineTo(endPoint.x, endPoint.y);
     context.stroke();
   }
   for (const item of preview.keys) {
     const xValue = (preview.kind === "canvasSpeed" || preview.kind === "cameraScale") ? item.value / 20 : item.value;
+    const position = drawX(xValue, item.time);
     context.beginPath();
-    context.arc(drawX(xValue), drawY(item.time), 7, 0, Math.PI * 2);
+    context.arc(position.x, position.y, 7, 0, Math.PI * 2);
     context.fill();
   }
   context.restore();

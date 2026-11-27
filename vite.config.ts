@@ -28,8 +28,10 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri`, plus the transient temp
+      //    directories editors use for atomic saves (watching them can crash
+      //    the dev server with EBUSY on Windows).
+      ignored: ["**/src-tauri/**", "**/*.tmpdir", "**/*.tmpdir/**", "**/*.tmp"],
     },
   },
 }));

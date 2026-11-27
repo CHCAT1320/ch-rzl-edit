@@ -33,7 +33,6 @@ export function drawCanvas(): void {
   const devicePixelRatio = window.devicePixelRatio || 1;
   const width = Math.max(1, Math.round(bounds.width));
   const height = Math.max(1, Math.round(bounds.height));
-  const center = calculateCenterSize(width, height);
   const context = canvas.getContext("2d");
   if (!context) return;
 
@@ -41,7 +40,8 @@ export function drawCanvas(): void {
   canvas.height = Math.round(height * devicePixelRatio);
   context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 
-  context.fillStyle = "rgba(0, 0, 0, 0.35)";
-  context.fillRect(0, 0, center.x, height);
-  context.fillRect(center.x + center.width, 0, width - center.x - center.width, height);
+  // Plain fallback before a chart is loaded; drawChart repaints this with the
+  // chart's own background colour as soon as data exists.
+  context.fillStyle = "#101216";
+  context.fillRect(0, 0, width, height);
 }

@@ -209,6 +209,32 @@ export function getEditingCanvasIndex(): number {
   return Math.max(0, Math.trunc(Number(input?.value) || 0));
 }
 
+let frostSurfaceCanvas: HTMLCanvasElement | null = null;
+
+// Cheap frosted-glass blur: downscale the rendered chart into a small offscreen
+// canvas and scale it back up, then tint it. Much lighter than a black wash.
+function frostRenderedChart(context: CanvasRenderingContext2D): void {
+  const canvas = context.canvas;
+  if (!canvas.width || !canvas.height) return;
+  frostSurfaceCanvas ??= document.createElement("canvas");
+  const width = Math.max(1, Math.round(canvas.width / 4));
+  const height = Math.max(1, Math.round(canvas.height / 4));
+  if (frostSurfaceCanvas.width !== width || frostSurfaceCanvas.height !== height) {
+    frostSurfaceCanvas.width = width;
+    frostSurfaceCanvas.height = height;
+  }
+  const frost = frostSurfaceCanvas.getContext("2d");
+  if (!frost) return;
+  frost.clearRect(0, 0, width, height);
+  frost.drawImage(canvas, 0, 0, width, height);
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(frostSurfaceCanvas, 0, 0, canvas.width, canvas.height);
+  context.restore();
+}
+
 export function drawEditOverlay(
   context: CanvasRenderingContext2D,
   surfaceWidth: number,
@@ -216,7 +242,14 @@ export function drawEditOverlay(
   playfieldWidth: number,
 ): void {
   if (!isEditMode()) return;
-  context.fillStyle = "rgba(0, 0, 0, 0.68)";
-  context.fillRect(-surfaceWidth / 2, 0, surfaceWidth, height);
+  frostRenderedChart(context);
+  const canvas = context.canvas;
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.fillStyle = "rgba(8, 10, 14, 0.22)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "rgba(255, 255, 255, 0.05)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.restore();
   drawBeatLines(context, surfaceWidth, playfieldWidth, height);
 }

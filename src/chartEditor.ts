@@ -1,7 +1,7 @@
 type Color = { r?: number; g?: number; b?: number; a?: number };
 import { beatTickToSeconds, getEditTimeY, getEditorXOffset, getVerticalDensity, isEditMode } from "./editMode";
 import { isDialogOpen, showAlert } from "./dialog";
-import { getPlaybackSeconds, isPlaying, pausePlayback, seekPlaybackSeconds } from "./playback";
+import { getPlaybackSeconds, pausePlayback, seekPlaybackSeconds } from "./playback";
 type Point = { time: number; xPosition: number; color: Color; easeType?: number; canvasIndex: number; floorPosition?: number };
 type Note = { type: number; time: number; floorPosition?: number; otherInformations?: number[] };
 type ColorPoint = { time: number; startColor: Color; endColor: Color };
@@ -694,6 +694,10 @@ function snapTime(value: number): number {
 }
 
 function toChartPoint(clientX: number, clientY: number): { x: number; time: number } {
+  // Line/note editing happens in the canvas' transformed space (Canvas X/Y
+  // offsets and rotation are applied to the drawn objects), so the cursor must
+  // be mapped back through the same transform.
+  if (mode() === "lineNote") return toCanvasChartPoint(clientX, clientY, editingCanvasIndex());
   const canvas = editorCanvas;
   if (!canvas) return { x: 0, time: currentTime() };
   const rect = canvas.getBoundingClientRect();
@@ -717,7 +721,7 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
   let localY = clientY - rect.top - playfield.y;
   if (move) {
     const rotation = editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180;
-    const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, current) * 720 * viewportScale : 0;
+    const offsetY = editorKeyPointValue(move.yPositionKeyPoints, current) * 720 * viewportScale;
     const canvasX = editorKeyPointValue(move.xPositionKeyPoints, current);
     const pivotX = (canvasX + getEditorXOffset()) * playfield.width;
     const pivotY = 1280 * viewportScale * 0.74;
@@ -728,7 +732,8 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
     localX = pivotX + dx * cos - dy * sin;
     localY = pivotY + dx * sin + dy * cos;
   }
-  const x = localX / playfield.width - getEditorXOffset();
+  const shiftX = move ? editorKeyPointValue(move.xPositionKeyPoints, current) * playfield.width : 0;
+  const x = (localX - shiftX) / playfield.width - getEditorXOffset();
   const y = localY / playfield.height;
   const speed = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value) || 7;
   const seconds = current + (0.74 - y) * 1280 / ((215 / 32 + speed) * 10 / 129 * 1280);
@@ -869,20 +874,19 @@ function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fa
   return points[points.length - 1].value;
 }
 
-function audioPlaying(): boolean {
-  return isPlaying();
-}
-
 export function editorCanvasTransform(position: { x: number; y: number }, canvasIndex: number, seconds: number, viewportScale: number): { x: number; y: number } {
   const move = chart?.canvasMoves[canvasIndex];
   if (!move) return position;
   const rotation = editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180;
-  const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, seconds) * 720 * viewportScale : 0;
-  if (rotation === 0 && offsetY === 0) return position;
+  // The editing layer applies the Canvas X/Y offsets exactly like the preview
+  // does, so a canvas keeps its position whether it is selected or not.
+  const offsetY = editorKeyPointValue(move.yPositionKeyPoints, seconds) * 720 * viewportScale;
   const canvasX = editorKeyPointValue(move.xPositionKeyPoints, seconds);
+  const shiftX = canvasX * 720 * viewportScale;
+  if (rotation === 0 && offsetY === 0 && shiftX === 0) return position;
   const pivotX = (canvasX + getEditorXOffset()) * 720 * viewportScale;
   const pivotY = 1280 * viewportScale * 0.74;
-  const dx = position.x - pivotX;
+  const dx = position.x + shiftX - pivotX;
   const dy = position.y - pivotY;
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
