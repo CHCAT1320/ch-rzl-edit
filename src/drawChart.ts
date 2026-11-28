@@ -1,5 +1,5 @@
 import { calculateCenterSize, MONO_FONT_STACK } from "./canvas";
-import { editorCanvasTransform, getEditorVisualState } from "./chartEditor";
+import { editorCameraScale, editorCanvasTransform, editorChartY, getEditorVisualState } from "./chartEditor";
 import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
 
@@ -740,13 +740,14 @@ function drawEditorObjects(
   if (!isEditMode() || state.mode !== "lineNote" || !state.chart) return;
   const themeIndex = themeState(seconds).active;
   const noteColor = color(themeColor(themeIndex, 1, { r: 255, g: 255, b: 255, a: 255 }));
+  const cameraScale = editorCameraScale(seconds);
   const selectedPoints = new Set(state.selectedItems.flatMap((item) => item.point ? [item.point] : []));
   const selectedNotes = new Set(state.selectedItems.flatMap((item) => item.note ? [item.note] : []));
   context.save();
   const editorPosition = (point: LinePoint): Point => editorCanvasTransform(
     {
       x: (point.xPosition + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
-      y: getEditTimeY(tickToSeconds(point.time), seconds, DESIGN_HEIGHT * viewportScale),
+      y: editorChartY(tickToSeconds(point.time), seconds, point.canvasIndex, viewportScale),
     },
     point.canvasIndex,
     seconds,
@@ -831,13 +832,13 @@ function drawEditorObjects(
       if (noteCanvas !== state.canvasIndex && holdCanvas !== state.canvasIndex) continue;
       const noteX = lineXAtEditorTime(line, note.time);
       if (noteX === null) continue;
-      const noteY = getEditTimeY(tickToSeconds(note.time), seconds, DESIGN_HEIGHT * viewportScale);
+      const noteY = editorChartY(tickToSeconds(note.time), seconds, noteCanvas, viewportScale);
       const headRaw = { x: (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale, y: noteY };
       const head = editorCanvasTransform(headRaw, noteCanvas, seconds, viewportScale);
       const selectedNote = selectedNotes.has(note);
       // Keep the same base geometry as preview mode. Selection only adds a
       // highlight ring; it must not change the note's actual size.
-      const noteSize = 2 * viewportScale;
+      const noteSize = cameraScale * 2 * viewportScale;
       const radius = note.type === 1 ? 9 * noteSize : 10 * noteSize;
       const fill = selectedNote ? "#ffeb3b" : note.type === 0 ? noteColor : note.type === 1 ? "#ffffff" : noteColor;
       context.fillStyle = fill;
@@ -845,7 +846,8 @@ function drawEditorObjects(
       context.lineWidth = Math.max(1, 6 * viewportScale);
       const holdInfo = note.otherInformations;
       if (note.type === 2 && holdInfo && holdInfo.length >= 1) {
-        const tailY = getEditTimeY(tickToSeconds(holdInfo[0]), seconds, DESIGN_HEIGHT * viewportScale);
+        const tailCanvas = Math.trunc(holdInfo[1] ?? noteCanvas);
+        const tailY = editorChartY(tickToSeconds(holdInfo[0]), seconds, tailCanvas, viewportScale);
         const tail = editorCanvasTransform({ x: headRaw.x, y: tailY }, noteCanvas, seconds, viewportScale);
         const dx = tail.x - head.x;
         const dy = tail.y - head.y;
@@ -868,15 +870,15 @@ function drawEditorObjects(
           context.moveTo(10 * noteSize, 0);
           context.lineTo(10 * noteSize, holdLength);
           context.stroke();
-          context.fillStyle = "#ffffff";
-          context.beginPath();
-          context.arc(0, 0, 10 * noteSize, 0, Math.PI * 2);
-          context.fill();
-          context.strokeStyle = "#000000";
-          context.lineWidth = Math.max(1, 8 * noteSize);
-          context.stroke();
           context.restore();
         }
+        context.fillStyle = "#ffffff";
+        context.beginPath();
+        context.arc(head.x, head.y, 10 * noteSize, 0, Math.PI * 2);
+        context.fill();
+        context.strokeStyle = "#000000";
+        context.lineWidth = Math.max(1, 8 * noteSize);
+        context.stroke();
         continue;
       }
       context.beginPath();
@@ -898,15 +900,16 @@ function drawEditorObjects(
 function lineXAtEditorTime(line: { linePoints: LinePoint[] }, time: number): number | null {
   const points = line.linePoints;
   if (points.length === 0 || time < points[0].time || time > points[points.length - 1].time) return null;
-  for (let index = 1; index < points.length; index += 1) {
-    const start = points[index - 1];
-    const end = points[index];
-    if (time <= end.time) {
-      const ratio = (time - start.time) / (end.time - start.time || 1);
-      return start.xPosition + (end.xPosition - start.xPosition) * ease(start.easeType, ratio);
-    }
+  let startIndex = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    if (points[index].time <= time) startIndex = index;
+    else break;
   }
-  return points[points.length - 1].xPosition;
+  const start = points[startIndex];
+  const end = points[startIndex + 1];
+  if (!end) return start.xPosition;
+  const ratio = (time - start.time) / (end.time - start.time || 1);
+  return start.xPosition + (end.xPosition - start.xPosition) * ease(start.easeType, ratio);
 }
 
 function drawEditorKeyFrames(
@@ -1134,7 +1137,16 @@ function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, sec
     const dx = tail.x - head.x;
     const dy = tail.y - head.y;
     const holdLength = Math.hypot(dx, dy);
-    if (holdLength <= 0.0001) return;
+    if (holdLength <= 0.0001) {
+      context.fillStyle = "#ffffff";
+      context.beginPath();
+      context.arc(head.x, head.y, 10 * noteSize, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "#000000";
+      context.lineWidth = Math.max(1, 8 * noteSize);
+      context.stroke();
+      return;
+    }
     const angle = Math.atan2(-dx, dy);
     const noteRgb = noteColor.match(/rgba?\(([^)]+)\)/)?.[1].split(",").map(Number) ?? [255, 255, 255, 1];
     context.save();
@@ -1449,8 +1461,15 @@ function drawEditorInteraction(
       const start = line.points[index - 1];
       const end = line.points[index];
       context.beginPath();
-      context.moveTo(drawX(start.xPosition), drawY(start.time));
-      context.lineTo(drawX(end.xPosition), drawY(end.time));
+      for (let part = 0; part <= 24; part += 1) {
+        const ratio = part / 24;
+        const x = start.xPosition + (end.xPosition - start.xPosition) * ease(start.easeType, ratio);
+        const time = start.time + (end.time - start.time) * ratio;
+        const px = drawX(x);
+        const py = drawY(time);
+        if (part === 0) context.moveTo(px, py);
+        else context.lineTo(px, py);
+      }
       context.stroke();
     }
     for (const point of line.points) {
@@ -1476,8 +1495,15 @@ function drawEditorInteraction(
     const startX = (preview.kind === "canvasSpeed" || preview.kind === "cameraScale") ? start.value / 20 : start.value;
     const endX = (preview.kind === "canvasSpeed" || preview.kind === "cameraScale") ? end.value / 20 : end.value;
     context.beginPath();
-    context.moveTo(drawX(startX), drawY(start.time));
-    context.lineTo(drawX(endX), drawY(end.time));
+    for (let part = 0; part <= 24; part += 1) {
+      const ratio = part / 24;
+      const x = startX + (endX - startX) * ease(start.easeType, ratio);
+      const time = start.time + (end.time - start.time) * ratio;
+      const px = drawX(x);
+      const py = drawY(time);
+      if (part === 0) context.moveTo(px, py);
+      else context.lineTo(px, py);
+    }
     context.stroke();
   }
   for (const item of preview.keys) {

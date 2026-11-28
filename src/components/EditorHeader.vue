@@ -3,6 +3,7 @@ import { exportChart } from "../fileManager";
 
 const emit = defineEmits<{
   (event: "back"): void;
+  (event: "clone"): void;
 }>();
 </script>
 
@@ -29,6 +30,7 @@ const emit = defineEmits<{
         <option value="cameraRotation">cameraRot</option>
       </select>
     </label>
+    <button class="simpleButton" type="button" @click="emit('clone')">多元素克隆</button>
     <button class="simpleButton" type="button" @click="exportChart">导出谱面</button>
   </header>
 </template>

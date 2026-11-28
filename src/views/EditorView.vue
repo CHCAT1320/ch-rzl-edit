@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { drawCanvas } from "../canvas";
 import { setupChartEditor } from "../chartEditor";
 import {
@@ -13,14 +13,17 @@ import { setPreviewMode, toggleEditMode } from "../editMode";
 import { onBeforeRouteLeave, useRouter } from "vue-router";
 import { restoreMusicElement, resetSession, hasImportedChart } from "../fileManager";
 import { isDialogOpen, showConfirm } from "../dialog";
+import { isOverlayOpen } from "../overlay";
 import { preloadHitSounds, resumeHitSounds } from "../hitSound";
 import EditorHeader from "../components/EditorHeader.vue";
 import EditorSidebar from "../components/EditorSidebar.vue";
+import CloneDialog from "../components/CloneDialog.vue";
 
 let disposeEditor: (() => void) | null = null;
 let previewStartTime: number | null = null;
 let audioElement: HTMLAudioElement | null = null;
 const router = useRouter();
+const showCloneDialog = ref(false);
 
 function redraw(): void {
   drawCanvas();
@@ -44,14 +47,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function handleSpaceCapture(event: KeyboardEvent): void {
-  if (isDialogOpen()) return;
+  if (isDialogOpen() || isOverlayOpen()) return;
   if (event.code !== "Space") return;
   event.preventDefault();
   if (event.target instanceof HTMLElement) event.target.blur();
 }
 
 function handleKeyDown(event: KeyboardEvent): void {
-  if (isDialogOpen()) return;
+  if (isDialogOpen() || isOverlayOpen()) return;
   if (event.code === "Space") {
     event.preventDefault();
     const audio = document.querySelector<HTMLAudioElement>("#audio");
@@ -180,10 +183,12 @@ function requestBack(): void {
 
 <template>
   <main class="container">
-    <EditorHeader @back="requestBack" />
+    <EditorHeader @back="requestBack" @clone="showCloneDialog = true" />
     <div id="editArea">
       <canvas id="cvs"></canvas>
       <EditorSidebar />
     </div>
   </main>
+
+  <CloneDialog v-model:visible="showCloneDialog" />
 </template>

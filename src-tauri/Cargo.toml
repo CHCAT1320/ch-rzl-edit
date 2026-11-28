@@ -1,6 +1,6 @@
 [package]
 name = "ch-rzl-edit"
-version = "0.1.4"
+version = "0.1.5"
 description = "A Rizline Chart Editor"
 authors = ["CHCAT1320"]
 edition = "2021"

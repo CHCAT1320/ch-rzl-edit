@@ -1,6 +1,7 @@
 type Color = { r?: number; g?: number; b?: number; a?: number };
-import { beatTickToSeconds, getEditTimeY, getEditorXOffset, getVerticalDensity, isEditMode } from "./editMode";
+import { beatTickToSeconds, getBeatDensity, getEditTimeY, getEditorXOffset, getVerticalDensity, isEditMode } from "./editMode";
 import { isDialogOpen, showAlert } from "./dialog";
+import { isOverlayOpen } from "./overlay";
 type Point = { time: number; xPosition: number; color: Color; easeType?: number; canvasIndex: number; floorPosition?: number };
 type Note = { type: number; time: number; floorPosition?: number; otherInformations?: number[] };
 type ColorPoint = { time: number; startColor: Color; endColor: Color };
@@ -121,7 +122,12 @@ export interface EditorVisualState {
     x: number;
     time: number;
     kind: string;
-    lines: Array<{ points: Point[]; notes: Array<Note & { previewX: number }> }>;
+    lines: Array<{
+      points: Point[];
+      notes: Array<Note & { previewX: number }>;
+      lineColor: ColorPoint[];
+      judgeRingColor: ColorPoint[];
+    }>;
     keys: KeyPoint[];
   } | null;
 }
@@ -143,7 +149,14 @@ let selectedItems: Selection[] = [];
 let marquee: { x0: number; time0: number; x1: number; time1: number } | null = null;
 let pasteMode = false;
 let boxSelectMode = false;
-let clipboard: { originX: number; originTime: number; lines: Array<{ points: Point[]; notes: Note[] }>; keys: KeyPoint[]; kind: string } | null = null;
+type ClipboardLine = {
+  points: Point[];
+  notes: Note[];
+  lineColor: ColorPoint[];
+  judgeRingColor: ColorPoint[];
+};
+
+let clipboard: { originX: number; originTime: number; lines: ClipboardLine[]; keys: KeyPoint[]; kind: string } | null = null;
 let pasteMirror = false;
 let pointerMoved = false;
 let speedEaseType = 0;
@@ -161,6 +174,324 @@ function selectedValue(): Point | Note | Line | KeyPoint | null {
 function notifyChange(): void {
   if (!chart) return;
   window.dispatchEvent(new CustomEvent("chartchanged", { detail: chart }));
+}
+
+const CANVAS_KEYFRAME_FIELDS = {
+  canvasX: "xPositionKeyPoints",
+  canvasY: "yPositionKeyPoints",
+  canvasSpeed: "speedKeyPoints",
+  canvasRotation: "rotationKeyPoints",
+} as const;
+
+export type CanvasKeyframeKind = keyof typeof CANVAS_KEYFRAME_FIELDS;
+
+function isCanvasKeyframeKind(kind: Selection["kind"]): kind is CanvasKeyframeKind {
+  return kind === "canvasX" || kind === "canvasY" || kind === "canvasSpeed" || kind === "canvasRotation";
+}
+
+export interface CanvasKeyframeSelectionInfo {
+  kinds: CanvasKeyframeKind[];
+  allKeyframeKinds: string[];
+  count: number;
+  canvasCount: number;
+  sourceCanvas: number;
+}
+
+export function getCanvasKeyframeSelectionInfo(): CanvasKeyframeSelectionInfo {
+  const allKeyframeKinds = [...new Set(
+    selectedItems
+      .filter((item) => item.item && isKeyframeKind(item.kind))
+      .map((item) => item.kind),
+  )];
+  const canvasItems = selectedItems.filter((item) => item.item && isCanvasKeyframeKind(item.kind));
+  return {
+    kinds: [...new Set(canvasItems.map((item) => item.kind as CanvasKeyframeKind))],
+    allKeyframeKinds,
+    count: canvasItems.length,
+    canvasCount: chart?.canvasMoves.length ?? 0,
+    sourceCanvas: editingCanvasIndex(),
+  };
+}
+
+export interface CloneChannelParameters {
+  lower: number;
+  upper: number;
+  easingType: number;
+  disturbance: number;
+  cycle: number[];
+}
+
+export interface CloneCanvasKeyframesOptions {
+  targets: number[];
+  increment: number;
+  keepSource: boolean;
+  x: CloneChannelParameters;
+  y: CloneChannelParameters;
+  rotation: CloneChannelParameters;
+}
+
+export interface CloneCanvasKeyframesResult {
+  copied: number;
+  targetCount: number;
+}
+
+function cloneChannelOffset(channel: CloneChannelParameters, targetIndex: number, progress: number): number {
+  const cycle = channel.cycle.length ? channel.cycle : [1];
+  const multiplier = cycle[targetIndex % cycle.length];
+  let value = channel.lower + (channel.upper - channel.lower) * speedEase(channel.easingType, progress);
+  if (channel.disturbance !== 0) value += (Math.random() * 2 - 1) * channel.disturbance;
+  return value * multiplier;
+}
+
+export function cloneSelectedCanvasKeyframes(options: CloneCanvasKeyframesOptions): CloneCanvasKeyframesResult {
+  if (!chart) throw new Error("请先载入谱面");
+  const chartData = chart;
+  const info = getCanvasKeyframeSelectionInfo();
+  if (info.allKeyframeKinds.some((kind) => !isCanvasKeyframeKind(kind as Selection["kind"]))) {
+    throw new Error("Camera 关键帧不能克隆到 Canvas，请选择 Canvas 关键帧");
+  }
+  if (info.count === 0) throw new Error("请先选择 Canvas X/Y/流速/旋转关键帧");
+  if (!options.targets.length) throw new Error("请输入至少一个目标 Canvas 序号");
+  const invalidTarget = options.targets.find(
+    (index) => !Number.isInteger(index) || index < 0 || index >= chartData.canvasMoves.length,
+  );
+  if (invalidTarget !== undefined) throw new Error(`目标 Canvas ${invalidTarget} 不存在`);
+  if (options.targets.length * info.count > 100_000) throw new Error("克隆数量过多，请缩小目标或选择范围");
+
+  const selected = selectedItems.filter(
+    (item): item is Selection & { kind: CanvasKeyframeKind; item: KeyPoint } =>
+      Boolean(item.item) && isCanvasKeyframeKind(item.kind),
+  );
+  const sourceCanvas = editingCanvasIndex();
+  const increment = options.increment / Math.max(1, getBeatDensity());
+  snapshot();
+  let copied = 0;
+
+  for (const entry of selected) {
+    const field = CANVAS_KEYFRAME_FIELDS[entry.kind];
+    const channel = entry.kind === "canvasX"
+      ? options.x
+      : entry.kind === "canvasY"
+        ? options.y
+        : entry.kind === "canvasRotation"
+          ? options.rotation
+          : null;
+    options.targets.forEach((targetCanvas, targetIndex) => {
+      const target = chartData.canvasMoves[targetCanvas]?.[field];
+      if (!target) return;
+      const time = Math.max(0, entry.item.time + targetIndex * increment);
+      const progress = options.targets.length > 1 ? targetIndex / (options.targets.length - 1) : 0;
+      const value = entry.item.value + (channel ? cloneChannelOffset(channel, targetIndex, progress) : 0);
+      const existing = target.findIndex((key) => Math.abs(key.time - time) < 1e-6);
+      if (existing >= 0) {
+        if (targetCanvas === sourceCanvas && options.keepSource) return;
+        target[existing] = { ...entry.item, time, value };
+      } else {
+        target.push({ ...entry.item, time, value });
+      }
+      copied += 1;
+    });
+  }
+
+  if (!options.keepSource) {
+    for (const entry of selected) {
+      const field = CANVAS_KEYFRAME_FIELDS[entry.kind];
+      const source = chartData.canvasMoves[sourceCanvas]?.[field];
+      if (!source) continue;
+      const index = source.indexOf(entry.item);
+      if (index >= 0) source.splice(index, 1);
+    }
+    setSingleSelection(null);
+  }
+
+  notifyChange();
+  refreshProperties();
+  return { copied, targetCount: options.targets.length };
+}
+
+type SelectedPointHold =
+  | { id: number; type: "point"; line: Line; point: Point }
+  | { id: number; type: "hold"; line: Line; note: Note };
+
+function collectSelectedPointHolds(): SelectedPointHold[] {
+  const result: SelectedPointHold[] = [];
+  let id = 0;
+  for (const item of selectedItems) {
+    if (item.line && item.point) {
+      result.push({ id, type: "point", line: item.line, point: item.point });
+      id += 1;
+    } else if (item.line && item.note && item.note.type === 2) {
+      result.push({ id, type: "hold", line: item.line, note: item.note });
+      id += 1;
+    }
+  }
+  return result;
+}
+
+export interface PointHoldCloneRow {
+  id: number;
+  type: "point" | "hold";
+  time: number;
+  endTime: number | null;
+  x: number;
+  canvasIndex: number;
+  endCanvasIndex: number | null;
+}
+
+export interface PointHoldSelectionInfo {
+  rows: PointHoldCloneRow[];
+  canvasCount: number;
+  sourceCanvas: number;
+}
+
+export function getPointHoldSelectionInfo(): PointHoldSelectionInfo {
+  const rows = collectSelectedPointHolds().map((entry): PointHoldCloneRow => {
+    if (entry.type === "point") {
+      return {
+        id: entry.id,
+        type: "point",
+        time: entry.point.time,
+        endTime: null,
+        x: entry.point.xPosition,
+        canvasIndex: entry.point.canvasIndex,
+        endCanvasIndex: null,
+      };
+    }
+    const startCanvas = noteCanvasIndex(entry.line, entry.note.time) ?? 0;
+    const rawEnd = entry.note.otherInformations?.[1];
+    const endCanvas = typeof rawEnd === "number" && Number.isFinite(rawEnd)
+      ? Math.trunc(rawEnd)
+      : startCanvas;
+    const rawEndTime = entry.note.otherInformations?.[0];
+    const endTime = typeof rawEndTime === "number" && Number.isFinite(rawEndTime)
+      ? rawEndTime
+      : entry.note.time;
+    return {
+      id: entry.id,
+      type: "hold",
+      time: entry.note.time,
+      endTime,
+      x: lineXAtTime(entry.line, entry.note.time) ?? 0,
+      canvasIndex: startCanvas,
+      endCanvasIndex: endCanvas,
+    };
+  });
+  return {
+    rows,
+    canvasCount: chart?.canvasMoves.length ?? 0,
+    sourceCanvas: editingCanvasIndex(),
+  };
+}
+
+export interface PointHoldCloneAssignment {
+  id: number;
+  canvasIndex: number;
+}
+
+export interface PointHoldCloneResult {
+  lines: number;
+  points: number;
+  holds: number;
+}
+
+export function cloneSelectedPointsAndHolds(
+  assignments: PointHoldCloneAssignment[],
+  keepSource: boolean,
+): PointHoldCloneResult {
+  if (!chart) throw new Error("请先载入谱面");
+  const chartData = chart;
+  const selected = collectSelectedPointHolds();
+  if (!selected.length) throw new Error("请先选择线节点或 Hold");
+  const assignmentMap = new Map(assignments.map((item) => [item.id, item.canvasIndex]));
+  if (!assignmentMap.size) throw new Error("请至少勾选一个要克隆的元素");
+  for (const target of assignmentMap.values()) {
+    if (!Number.isInteger(target) || target < 0 || target >= chartData.canvasMoves.length) {
+      throw new Error(`目标 Canvas ${target} 不存在`);
+    }
+  }
+
+  type Group = { points: Point[]; notes: Note[]; lineColor: ColorPoint[]; judgeRingColor: ColorPoint[] };
+  const groups = new Map<Line, Group>();
+  let copiedPoints = 0;
+  let copiedHolds = 0;
+
+  const groupFor = (line: Line): Group => {
+    let group = groups.get(line);
+    if (!group) {
+      group = {
+        points: [],
+        notes: [],
+        lineColor: (line.lineColor ?? []).map(cloneColorPoint),
+        judgeRingColor: (line.judgeRingColor ?? []).map(cloneColorPoint),
+      };
+      groups.set(line, group);
+    }
+    return group;
+  };
+
+  snapshot();
+  for (const entry of selected) {
+    const target = assignmentMap.get(entry.id);
+    if (target === undefined) continue;
+    const group = groupFor(entry.line);
+    if (entry.type === "point") {
+      group.points.push({ ...clonePoint(entry.point), canvasIndex: target });
+      copiedPoints += 1;
+      continue;
+    }
+
+    const infos = entry.note.otherInformations ? [...entry.note.otherInformations] : [];
+    infos[0] = typeof infos[0] === "number" ? infos[0] : entry.note.time;
+    infos[1] = target;
+    infos[2] = 0;
+    group.notes.push({ ...cloneNote(entry.note), otherInformations: infos, floorPosition: 0 });
+    if (!group.points.some((point) => Math.abs(point.time - entry.note.time) < 1e-6)) {
+      const previous = previousPointAtTime(entry.line, entry.note.time);
+      const sortedClones = [...group.points].sort((left, right) => left.time - right.time);
+      const previousClone = [...sortedClones].reverse().find((point) => point.time <= entry.note.time);
+      const startCanvas = previousClone?.canvasIndex ?? sortedClones[0]?.canvasIndex ?? target;
+      group.points.push({
+        time: entry.note.time,
+        xPosition: lineXAtTime(entry.line, entry.note.time) ?? previous?.xPosition ?? 0,
+        color: previous?.color ? { ...previous.color } : { r: 255, g: 255, b: 255, a: 255 },
+        easeType: previous?.easeType ?? 0,
+        canvasIndex: startCanvas,
+      });
+    }
+    copiedHolds += 1;
+  }
+
+  let copiedLines = 0;
+  for (const group of groups.values()) {
+    if (!group.points.length && !group.notes.length) continue;
+    group.points.sort((left, right) => left.time - right.time);
+    chartData.lines.push({
+      linePoints: group.points,
+      notes: group.notes,
+      lineColor: group.lineColor,
+      judgeRingColor: group.judgeRingColor,
+    });
+    copiedLines += 1;
+  }
+
+  if (!keepSource) {
+    for (const entry of selected) {
+      if (!assignmentMap.has(entry.id)) continue;
+      if (entry.type === "point") {
+        entry.line.linePoints = entry.line.linePoints.filter((point) => point !== entry.point);
+      } else {
+        entry.line.notes = entry.line.notes.filter((note) => note !== entry.note);
+      }
+    }
+    chartData.lines = chartData.lines.filter(
+      (line) => line.linePoints.length > 0 || line.notes.length > 0,
+    );
+    setSingleSelection(null);
+  }
+
+  notifyChange();
+  refreshProperties();
+  return { lines: copiedLines, points: copiedPoints, holds: copiedHolds };
 }
 
 export function setEditorChart(value: unknown): void {
@@ -462,6 +793,25 @@ function cloneKey(item: KeyPoint): KeyPoint {
   return { ...item };
 }
 
+function cloneColorPoint(point: ColorPoint): ColorPoint {
+  return {
+    time: point.time,
+    startColor: { ...point.startColor },
+    endColor: { ...point.endColor },
+  };
+}
+
+function clonePastedNote(note: Note & { previewX?: number }): Note {
+  const copied = cloneNote(note);
+  delete (copied as Note & { previewX?: number }).previewX;
+  return copied;
+}
+
+function previousPointAtTime(line: Line, time: number): Point | undefined {
+  const sorted = [...line.linePoints].sort((left, right) => left.time - right.time);
+  return [...sorted].reverse().find((item) => item.time <= time) ?? sorted[0];
+}
+
 function setSelection(next: Selection | null, extras: Selection[] = []): void {
   selected = next;
   selectedItems = next ? [next, ...extras.filter((item) => item !== next)] : extras;
@@ -499,7 +849,12 @@ function pastePreviewAtCursor(): EditorVisualState["pastePreview"] {
           ?? mapX(lineXAtTime({ linePoints: line.points } as Line, note.time) ?? clipboard!.originX);
         return copied;
       });
-      return { points, notes };
+      return {
+        points,
+        notes,
+        lineColor: line.lineColor.map((point) => ({ ...cloneColorPoint(point), time: mapTime(point.time) })),
+        judgeRingColor: line.judgeRingColor.map((point) => ({ ...cloneColorPoint(point), time: mapTime(point.time) })),
+      };
     }),
     keys: clipboard.keys.map((item) => {
       const copied = cloneKey(item);
@@ -514,30 +869,36 @@ function copySelection(cut: boolean): void {
   if (!chart) return;
   const items = selectedItems.length ? selectedItems : selected ? [selected] : [];
   if (items.length === 0) return;
-  const lines = new Map<Line, { points: Point[]; notes: Note[] }>();
+  const lines = new Map<Line, ClipboardLine>();
   const keys: KeyPoint[] = [];
   let kind = mode();
   for (const item of items) {
     if (item.line && item.point) {
-      const group = lines.get(item.line) ?? { points: [], notes: [] };
+      const group = lines.get(item.line) ?? { points: [], notes: [], lineColor: [], judgeRingColor: [] };
       group.points.push(clonePoint(item.point));
       lines.set(item.line, group);
     } else if (item.line && item.note) {
-      const group = lines.get(item.line) ?? { points: [], notes: [] };
+      const group = lines.get(item.line) ?? { points: [], notes: [], lineColor: [], judgeRingColor: [] };
       group.notes.push(cloneNote(item.note));
       const noteX = lineXAtTime(item.line, item.note.time);
       if (noteX !== null && !group.points.some((point) => Math.abs(point.time - item.note!.time) < 1e-6)) {
+        const previous = previousPointAtTime(item.line, item.note.time);
         group.points.push({
           time: item.note.time,
           xPosition: noteX,
-          color: { r: 255, g: 255, b: 255, a: 255 },
-          easeType: 0,
+          color: previous?.color ? { ...previous.color } : { r: 255, g: 255, b: 255, a: 255 },
+          easeType: previous?.easeType ?? 0,
           canvasIndex: editingCanvasIndex(),
         });
       }
       lines.set(item.line, group);
     } else if (item.kind === "line" && item.line) {
-      lines.set(item.line, { points: item.line.linePoints.map(clonePoint), notes: item.line.notes.map(cloneNote) });
+      lines.set(item.line, {
+        points: item.line.linePoints.map(clonePoint),
+        notes: item.line.notes.map(cloneNote),
+        lineColor: (item.line.lineColor ?? []).map(cloneColorPoint),
+        judgeRingColor: (item.line.judgeRingColor ?? []).map(cloneColorPoint),
+      });
     } else if (item.item) {
       keys.push(cloneKey(item.item));
       kind = item.kind;
@@ -575,9 +936,9 @@ function applyPaste(): void {
     if (!group.points.length && !group.notes.length) continue;
     const line: Line = {
       linePoints: group.points.map(clonePoint),
-      notes: group.notes.map((note) => cloneNote(note)),
-      judgeRingColor: [],
-      lineColor: [],
+      notes: group.notes.map(clonePastedNote),
+      judgeRingColor: group.judgeRingColor.map(cloneColorPoint),
+      lineColor: group.lineColor.map(cloneColorPoint),
     };
     line.linePoints.sort((left, right) => left.time - right.time);
     chart.lines.push(line);
@@ -693,15 +1054,7 @@ function snapTime(value: number): number {
 }
 
 function toChartPoint(clientX: number, clientY: number): { x: number; time: number } {
-  const canvas = editorCanvas;
-  if (!canvas) return { x: 0, time: currentTime() };
-  const rect = canvas.getBoundingClientRect();
-  const playfield = calculateCenterSize(rect.width, rect.height);
-  const x = (clientX - rect.left - rect.width / 2) / playfield.width - getEditorXOffset();
-  const y = (clientY - rect.top - playfield.y) / playfield.height;
-  const speed = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value) || 7;
-  const seconds = currentTime() + (0.74 - y) * 1280 / ((215 / 32 + speed) * 10 / 129 * 1280);
-  return { x: snapX(x), time: snapTime(seconds) };
+  return toCanvasChartPoint(clientX, clientY, editingCanvasIndex());
 }
 
 function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: number): { x: number; time: number } {
@@ -710,27 +1063,41 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
   const rect = canvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
-  const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
+  const camera = editorCameraState(current);
   const move = chart?.canvasMoves[canvasIndex];
-  let localX = clientX - rect.left - rect.width / 2;
+  const width = playfield.width;
+  const height = playfield.height;
+  const ringY = height * 0.74;
+  const canvasX = move ? editorKeyPointValue(move.xPositionKeyPoints, current) : 0;
+  const canvasY = move ? editorKeyPointValue(move.yPositionKeyPoints, current) : 0;
+  const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180 : 0;
+  let localX = clientX - rect.left - rect.width / 2 - getEditorXOffset() * width;
   let localY = clientY - rect.top - playfield.y;
-  if (move) {
-    const rotation = editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180;
-    const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, current) * 720 * viewportScale : 0;
-    const canvasX = editorKeyPointValue(move.xPositionKeyPoints, current);
-    const pivotX = (canvasX + getEditorXOffset()) * playfield.width;
-    const pivotY = 1280 * viewportScale * 0.74;
-    const dx = localX - pivotX;
-    const dy = localY - offsetY - pivotY;
-    const cos = Math.cos(-rotation);
-    const sin = Math.sin(-rotation);
-    localX = pivotX + dx * cos - dy * sin;
-    localY = pivotY + dx * sin + dy * cos;
+  if (camera.rotation !== 0 || camera.y !== 0) {
+    const cameraOffsetY = camera.y * width;
+    const dx = localX;
+    const dy = localY - cameraOffsetY - ringY;
+    const cos = Math.cos(-camera.rotation);
+    const sin = Math.sin(-camera.rotation);
+    localX = dx * cos - dy * sin;
+    localY = ringY + dx * sin + dy * cos;
   }
-  const x = localX / playfield.width - getEditorXOffset();
-  const y = localY / playfield.height;
-  const speed = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value) || 7;
-  const seconds = current + (0.74 - y) * 1280 / ((215 / 32 + speed) * 10 / 129 * 1280);
+  if (move) {
+    const canvasOffsetY = canvasY * width * camera.scale;
+    const pivotX = (canvasX + camera.x) * camera.scale * width;
+    const dx = localX - pivotX;
+    const dy = localY - canvasOffsetY - ringY;
+    const cos = Math.cos(-canvasRotation);
+    const sin = Math.sin(-canvasRotation);
+    localX = pivotX + dx * cos - dy * sin;
+    localY = ringY + dx * sin + dy * cos;
+  }
+  localX = localX / camera.scale - (canvasX + camera.x) * width;
+  localY = ringY + (localY - ringY) / camera.scale;
+  const x = localX / width;
+  const floorDelta = (ringY - localY) / (editorSpeedRatio() * height);
+  const targetFloor = editorSpeedFloorAt(current, canvasIndex) + floorDelta;
+  const seconds = editorSecondsAtFloor(targetFloor, canvasIndex, current);
   return { x: snapX(x), time: snapTime(seconds) };
 }
 
@@ -841,16 +1208,18 @@ function nearestLine(clientX: number, clientY: number, threshold = 14): Line | n
 }
 
 function lineXAtTime(line: Line, time: number): number | null {
-  if (line.linePoints.length === 0 || time < line.linePoints[0].time || time > line.linePoints[line.linePoints.length - 1].time) return null;
-  for (let index = 1; index < line.linePoints.length; index += 1) {
-    const start = line.linePoints[index - 1];
-    const end = line.linePoints[index];
-    if (time <= end.time) {
-      const ratio = (time - start.time) / (end.time - start.time || 1);
-      return start.xPosition + (end.xPosition - start.xPosition) * speedEase(start.easeType, ratio);
-    }
+  const points = line.linePoints;
+  if (points.length === 0 || time < points[0].time || time > points[points.length - 1].time) return null;
+  let startIndex = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    if (points[index].time <= time) startIndex = index;
+    else break;
   }
-  return line.linePoints[line.linePoints.length - 1].xPosition;
+  const start = points[startIndex];
+  const end = points[startIndex + 1];
+  if (!end) return start.xPosition;
+  const ratio = (time - start.time) / (end.time - start.time || 1);
+  return start.xPosition + (end.xPosition - start.xPosition) * speedEase(start.easeType, ratio);
 }
 
 function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fallback = 0): number {
@@ -868,28 +1237,124 @@ function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fa
   return points[points.length - 1].value;
 }
 
-function audioPlaying(): boolean {
-  const audio = document.querySelector<HTMLAudioElement>("#audio");
-  return !!audio && !audio.paused && !audio.ended && !audio.seeking;
+function editorCameraState(seconds: number): { x: number; scale: number; y: number; rotation: number } {
+  const camera = chart?.cameraMove;
+  return {
+    x: -editorKeyPointValue(camera?.xPositionKeyPoints, seconds, 0),
+    scale: Math.max(0.0001, editorKeyPointValue(camera?.scaleKeyPoints, seconds, 1)),
+    y: editorKeyPointValue(camera?.yPositionKeyPoints, seconds, 0),
+    rotation: editorKeyPointValue(camera?.rotationKeyPoints, seconds, 0) * Math.PI / 180,
+  };
+}
+
+export function editorCameraScale(seconds: number): number {
+  return editorCameraState(seconds).scale;
+}
+
+function editorSpeedRatio(): number {
+  const value = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value);
+  const speed = Number.isFinite(value) ? Math.max(0, value) : 7;
+  return (215 / 32 + speed) * (10 / 129);
+}
+
+type EditorSpeedSample = { seconds: number; floor: number; value: number };
+
+function editorSpeedSamples(canvasIndex: number): EditorSpeedSample[] {
+  const points = [...(chart?.canvasMoves[canvasIndex]?.speedKeyPoints ?? [])]
+    .sort((left, right) => left.time - right.time);
+  if (points.length === 0) return [];
+
+  const samples: EditorSpeedSample[] = [];
+  let floor = 0;
+  let previousSeconds = 0;
+  points.forEach((point, index) => {
+    const seconds = beatTickToSeconds(point.time);
+    if (index > 0) {
+      const previous = points[index - 1];
+      floor += (seconds - previousSeconds) * Number(previous.value);
+    }
+    samples.push({ seconds, floor, value: Number(point.value) });
+    previousSeconds = seconds;
+  });
+  return samples;
+}
+
+function editorSpeedFloorAt(seconds: number, canvasIndex: number): number {
+  const samples = editorSpeedSamples(canvasIndex);
+  if (samples.length === 0) return 0;
+  let sample = samples[0];
+  for (const candidate of samples) {
+    if (candidate.seconds <= seconds) sample = candidate;
+    else break;
+  }
+  return sample.floor + (seconds - sample.seconds) * sample.value;
+}
+
+function editorSecondsAtFloor(targetFloor: number, canvasIndex: number, referenceSeconds: number): number {
+  const samples = editorSpeedSamples(canvasIndex);
+  if (samples.length === 0) return targetFloor;
+
+  let best: number | null = null;
+  samples.forEach((sample, index) => {
+    if (!Number.isFinite(sample.value) || sample.value === 0) return;
+    const seconds = sample.seconds + (targetFloor - sample.floor) / sample.value;
+    const end = samples[index + 1]?.seconds ?? Number.POSITIVE_INFINITY;
+    if (seconds < sample.seconds - 1e-6 || seconds > end + 1e-6) return;
+    if (best === null || Math.abs(seconds - referenceSeconds) < Math.abs(best - referenceSeconds)) {
+      best = seconds;
+    }
+  });
+  if (best !== null) return best;
+
+  let current = samples[0];
+  for (const candidate of samples) {
+    if (candidate.seconds <= referenceSeconds) current = candidate;
+    else break;
+  }
+  return current.value === 0
+    ? referenceSeconds
+    : referenceSeconds + (targetFloor - editorSpeedFloorAt(referenceSeconds, canvasIndex)) / current.value;
+}
+
+export function editorChartY(targetSeconds: number, currentSeconds: number, canvasIndex: number, viewportScale: number): number {
+  const height = 1280 * viewportScale;
+  const ringY = height * 0.74;
+  const floorDelta = editorSpeedFloorAt(targetSeconds, canvasIndex) - editorSpeedFloorAt(currentSeconds, canvasIndex);
+  return ringY - floorDelta * editorSpeedRatio() * height;
 }
 
 export function editorCanvasTransform(position: { x: number; y: number }, canvasIndex: number, seconds: number, viewportScale: number): { x: number; y: number } {
   const move = chart?.canvasMoves[canvasIndex];
-  if (!move) return position;
-  const rotation = editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180;
-  const offsetY = audioPlaying() ? editorKeyPointValue(move.yPositionKeyPoints, seconds) * 720 * viewportScale : 0;
-  if (rotation === 0 && offsetY === 0) return position;
-  const canvasX = editorKeyPointValue(move.xPositionKeyPoints, seconds);
-  const pivotX = (canvasX + getEditorXOffset()) * 720 * viewportScale;
-  const pivotY = 1280 * viewportScale * 0.74;
-  const dx = position.x - pivotX;
-  const dy = position.y - pivotY;
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  return {
-    x: pivotX + dx * cos - dy * sin,
-    y: pivotY + dx * sin + dy * cos + offsetY,
-  };
+  const width = 720 * viewportScale;
+  const height = 1280 * viewportScale;
+  const ringY = height * 0.74;
+  const camera = editorCameraState(seconds);
+  const canvasX = move ? editorKeyPointValue(move.xPositionKeyPoints, seconds) : 0;
+  const canvasY = move ? editorKeyPointValue(move.yPositionKeyPoints, seconds) : 0;
+  const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180 : 0;
+  const baseX = position.x / width - getEditorXOffset();
+  let x = (baseX + canvasX + camera.x) * camera.scale * width;
+  let y = ringY + (position.y - ringY) * camera.scale;
+  const canvasOffsetY = canvasY * width * camera.scale;
+  if (canvasRotation !== 0 || canvasOffsetY !== 0) {
+    const pivotX = (canvasX + camera.x) * camera.scale * width;
+    const dx = x - pivotX;
+    const dy = y - ringY;
+    const cos = Math.cos(canvasRotation);
+    const sin = Math.sin(canvasRotation);
+    x = pivotX + dx * cos - dy * sin;
+    y = ringY + dx * sin + dy * cos + canvasOffsetY;
+  }
+  if (camera.rotation !== 0 || camera.y !== 0) {
+    const offsetY = camera.y * width;
+    const dx = x;
+    const dy = y - ringY;
+    const cos = Math.cos(camera.rotation);
+    const sin = Math.sin(camera.rotation);
+    x = dx * cos - dy * sin;
+    y = ringY + dx * sin + dy * cos + offsetY;
+  }
+  return { x: x + getEditorXOffset() * width, y };
 }
 
 function editorScreenPosition(x: number, time: number, canvasIndex?: number): { x: number; y: number } | null {
@@ -900,7 +1365,9 @@ function editorScreenPosition(x: number, time: number, canvasIndex?: number): { 
   const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
   const local = {
     x: (x + getEditorXOffset()) * playfield.width,
-    y: getEditTimeY(beatTickToSeconds(time), current, 1280 * viewportScale),
+    y: canvasIndex === undefined
+      ? getEditTimeY(beatTickToSeconds(time), current, 1280 * viewportScale)
+      : editorChartY(beatTickToSeconds(time), current, canvasIndex, viewportScale),
   };
   const transformed = canvasIndex === undefined ? local : editorCanvasTransform(local, canvasIndex, current, viewportScale);
   return {
@@ -1004,7 +1471,7 @@ function createPoint(): void {
     lineColor: [],
   };
   snapshot();
-  const previous = [...line.linePoints].reverse().find((item) => item.time <= point.time) ?? line.linePoints[line.linePoints.length - 1];
+  const previous = previousPointAtTime(line, point.time);
   const node: Point = {
     time: point.time,
     xPosition: point.x,
@@ -1518,7 +1985,7 @@ export function setupChartEditor(): () => void {
   }, { passive: false });
   document.querySelector("#applyProperty")?.addEventListener("click", applyProperties);
   const handleGlobalKeyDown = (event: KeyboardEvent): void => {
-    if (isDialogOpen()) return;
+    if (isDialogOpen() || isOverlayOpen()) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
     if (!isEditMode()) return;
