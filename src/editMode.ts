@@ -209,29 +209,29 @@ export function getEditingCanvasIndex(): number {
   return Math.max(0, Math.trunc(Number(input?.value) || 0));
 }
 
-let frostSurfaceCanvas: HTMLCanvasElement | null = null;
+const FROST_BLUR_PX = 6;
 
-// Cheap frosted-glass blur: downscale the rendered chart into a small offscreen
-// canvas and scale it back up, then tint it. Much lighter than a black wash.
+// Frosted glass: snapshot the already-rendered frame at full resolution and
+// blur it with the native canvas filter. The snapshot is drawn slightly scaled
+// up so the blur's half-transparent border falls outside the canvas instead of
+// fading the edges.
 function frostRenderedChart(context: CanvasRenderingContext2D): void {
   const canvas = context.canvas;
-  if (!canvas.width || !canvas.height) return;
-  frostSurfaceCanvas ??= document.createElement("canvas");
-  const width = Math.max(1, Math.round(canvas.width / 4));
-  const height = Math.max(1, Math.round(canvas.height / 4));
-  if (frostSurfaceCanvas.width !== width || frostSurfaceCanvas.height !== height) {
-    frostSurfaceCanvas.width = width;
-    frostSurfaceCanvas.height = height;
-  }
-  const frost = frostSurfaceCanvas.getContext("2d");
-  if (!frost) return;
-  frost.clearRect(0, 0, width, height);
-  frost.drawImage(canvas, 0, 0, width, height);
+  const width = canvas.width;
+  const height = canvas.height;
+  if (!width || !height) return;
+  const zoom = 1 + (FROST_BLUR_PX * 4) / Math.min(width, height);
   context.save();
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
-  context.drawImage(frostSurfaceCanvas, 0, 0, canvas.width, canvas.height);
+  context.filter = `blur(${FROST_BLUR_PX}px)`;
+  // Browsers without canvas filters report "none" here; the tint alone is fine.
+  if (context.filter !== "none") {
+    const drawWidth = width * zoom;
+    const drawHeight = height * zoom;
+    context.drawImage(canvas, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  }
   context.restore();
 }
 
