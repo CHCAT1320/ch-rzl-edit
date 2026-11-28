@@ -1063,7 +1063,6 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
   const rect = canvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
-  const camera = editorCameraState(current);
   const move = chart?.canvasMoves[canvasIndex];
   const width = playfield.width;
   const height = playfield.height;
@@ -1073,18 +1072,9 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
   const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180 : 0;
   let localX = clientX - rect.left - rect.width / 2 - getEditorXOffset() * width;
   let localY = clientY - rect.top - playfield.y;
-  if (camera.rotation !== 0 || camera.y !== 0) {
-    const cameraOffsetY = camera.y * width;
-    const dx = localX;
-    const dy = localY - cameraOffsetY - ringY;
-    const cos = Math.cos(-camera.rotation);
-    const sin = Math.sin(-camera.rotation);
-    localX = dx * cos - dy * sin;
-    localY = ringY + dx * sin + dy * cos;
-  }
   if (move) {
-    const canvasOffsetY = canvasY * width * camera.scale;
-    const pivotX = (canvasX + camera.x) * camera.scale * width;
+    const canvasOffsetY = canvasY * width;
+    const pivotX = canvasX * width;
     const dx = localX - pivotX;
     const dy = localY - canvasOffsetY - ringY;
     const cos = Math.cos(-canvasRotation);
@@ -1092,9 +1082,7 @@ function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: numbe
     localX = pivotX + dx * cos - dy * sin;
     localY = ringY + dx * sin + dy * cos;
   }
-  localX = localX / camera.scale - (canvasX + camera.x) * width;
-  localY = ringY + (localY - ringY) / camera.scale;
-  const x = localX / width;
+  const x = localX / width - canvasX;
   const floorDelta = (ringY - localY) / (editorSpeedRatio() * height);
   const targetFloor = editorSpeedFloorAt(current, canvasIndex) + floorDelta;
   const seconds = editorSecondsAtFloor(targetFloor, canvasIndex, current);
@@ -1237,20 +1225,6 @@ function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fa
   return points[points.length - 1].value;
 }
 
-function editorCameraState(seconds: number): { x: number; scale: number; y: number; rotation: number } {
-  const camera = chart?.cameraMove;
-  return {
-    x: -editorKeyPointValue(camera?.xPositionKeyPoints, seconds, 0),
-    scale: Math.max(0.0001, editorKeyPointValue(camera?.scaleKeyPoints, seconds, 1)),
-    y: editorKeyPointValue(camera?.yPositionKeyPoints, seconds, 0),
-    rotation: editorKeyPointValue(camera?.rotationKeyPoints, seconds, 0) * Math.PI / 180,
-  };
-}
-
-export function editorCameraScale(seconds: number): number {
-  return editorCameraState(seconds).scale;
-}
-
 function editorSpeedRatio(): number {
   const value = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value);
   const speed = Number.isFinite(value) ? Math.max(0, value) : 7;
@@ -1328,31 +1302,21 @@ export function editorCanvasTransform(position: { x: number; y: number }, canvas
   const width = 720 * viewportScale;
   const height = 1280 * viewportScale;
   const ringY = height * 0.74;
-  const camera = editorCameraState(seconds);
   const canvasX = move ? editorKeyPointValue(move.xPositionKeyPoints, seconds) : 0;
   const canvasY = move ? editorKeyPointValue(move.yPositionKeyPoints, seconds) : 0;
   const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180 : 0;
   const baseX = position.x / width - getEditorXOffset();
-  let x = (baseX + canvasX + camera.x) * camera.scale * width;
-  let y = ringY + (position.y - ringY) * camera.scale;
-  const canvasOffsetY = canvasY * width * camera.scale;
+  let x = (baseX + canvasX) * width;
+  let y = position.y;
+  const canvasOffsetY = canvasY * width;
   if (canvasRotation !== 0 || canvasOffsetY !== 0) {
-    const pivotX = (canvasX + camera.x) * camera.scale * width;
+    const pivotX = canvasX * width;
     const dx = x - pivotX;
     const dy = y - ringY;
     const cos = Math.cos(canvasRotation);
     const sin = Math.sin(canvasRotation);
     x = pivotX + dx * cos - dy * sin;
     y = ringY + dx * sin + dy * cos + canvasOffsetY;
-  }
-  if (camera.rotation !== 0 || camera.y !== 0) {
-    const offsetY = camera.y * width;
-    const dx = x;
-    const dy = y - ringY;
-    const cos = Math.cos(camera.rotation);
-    const sin = Math.sin(camera.rotation);
-    x = dx * cos - dy * sin;
-    y = ringY + dx * sin + dy * cos + offsetY;
   }
   return { x: x + getEditorXOffset() * width, y };
 }
