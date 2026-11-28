@@ -1,5 +1,5 @@
 import { calculateCenterSize, MONO_FONT_STACK } from "./canvas";
-import { editorCanvasTransform, editorChartY, getEditorVisualState } from "./chartEditor";
+import { getEditorVisualState } from "./chartEditor";
 import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
 
@@ -679,17 +679,16 @@ function drawScene(
   cameraScale: number,
   cameraX: number,
   themeIndex: number,
-  editing = false,
 ): void {
   const noteColor = color(themeColor(themeIndex, 1, { r: 255, g: 255, b: 255, a: 255 }));
   context.save();
-  if (!editing) applyCameraTransform(context, currentSeconds, viewportScale, cameraScale);
+  applyCameraTransform(context, currentSeconds, viewportScale, cameraScale);
   for (const line of chart?.lines ?? []) {
     drawLine(context, line, currentSeconds, viewportScale, cameraScale, cameraX);
   }
   for (const line of chart?.lines ?? []) {
     for (const note of line.notes) {
-      drawNote(context, line, note, currentSeconds, viewportScale, cameraScale, cameraX, noteColor, editing);
+      drawNote(context, line, note, currentSeconds, viewportScale, cameraScale, cameraX, noteColor);
     }
   }
   context.restore();
@@ -705,9 +704,7 @@ function drawCanvasIndexes(
   if (!chart) return;
   if (!document.querySelector<HTMLInputElement>("#showCanvasIndex")?.checked) return;
   const metrics = renderMetrics(viewportScale);
-  const labelScale = isEditMode() ? 1 : cameraScale;
-  const labelCameraX = isEditMode() ? 0 : cameraX;
-  const fontSize = Math.max(12, 70 * Math.max(labelScale, 0.25) * viewportScale);
+  const fontSize = Math.max(12, 70 * Math.max(cameraScale, 0.25) * viewportScale);
   const count = chart.canvasMoves.length;
   const minY = fontSize * 0.6;
   const maxY = metrics.height - fontSize * 0.6;
@@ -721,9 +718,9 @@ function drawCanvasIndexes(
   context.lineWidth = Math.max(1, 2 * viewportScale);
   chart.canvasMoves.forEach((_, index) => {
     const canvas = canvasPosition(seconds, index);
-    const x = (canvas.x + labelCameraX) * DESIGN_WIDTH * labelScale * viewportScale;
+    const x = (canvas.x + cameraX) * DESIGN_WIDTH * cameraScale * viewportScale;
     const baseY = Math.max(minY, Math.min(maxY, maxY - index * rowGap));
-    const y = baseY + canvasYOffset(seconds, index) * metrics.width * labelScale;
+    const y = baseY + canvasYOffset(seconds, index) * metrics.width * cameraScale;
     context.save();
     context.translate(x, y);
     context.rotate(canvasRotation(seconds, index));
@@ -746,15 +743,10 @@ function drawEditorObjects(
   const selectedPoints = new Set(state.selectedItems.flatMap((item) => item.point ? [item.point] : []));
   const selectedNotes = new Set(state.selectedItems.flatMap((item) => item.note ? [item.note] : []));
   context.save();
-  const editorPosition = (point: LinePoint): Point => editorCanvasTransform(
-    {
-      x: (point.xPosition + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
-      y: editorChartY(tickToSeconds(point.time), seconds, point.canvasIndex, viewportScale),
-    },
-    point.canvasIndex,
-    seconds,
-    viewportScale,
-  );
+  const editorPosition = (point: LinePoint): Point => ({
+    x: (point.xPosition + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
+    y: getEditTimeY(tickToSeconds(point.time), seconds, DESIGN_HEIGHT * viewportScale),
+  });
   for (const line of state.chart.lines) {
     const points = line.linePoints;
     if (!points.some((point) => point.canvasIndex === state.canvasIndex)) continue;
@@ -834,12 +826,12 @@ function drawEditorObjects(
       if (noteCanvas !== state.canvasIndex && holdCanvas !== state.canvasIndex) continue;
       const noteX = lineXAtEditorTime(line, note.time);
       if (noteX === null) continue;
-      const noteY = editorChartY(tickToSeconds(note.time), seconds, noteCanvas, viewportScale);
-      const headRaw = { x: (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale, y: noteY };
-      const head = editorCanvasTransform(headRaw, noteCanvas, seconds, viewportScale);
+      const head = {
+        x: (noteX + getEditorXOffset()) * DESIGN_WIDTH * viewportScale,
+        y: getEditTimeY(tickToSeconds(note.time), seconds, DESIGN_HEIGHT * viewportScale),
+      };
       const selectedNote = selectedNotes.has(note);
-      // Keep the same base geometry as preview mode. Selection only adds a
-      // highlight ring; it must not change the note's actual size.
+      // Selection only adds a highlight ring; it must not change the note size.
       const noteSize = 2 * viewportScale;
       const radius = note.type === 1 ? 9 * noteSize : 10 * noteSize;
       const fill = selectedNote ? "#ffeb3b" : note.type === 0 ? noteColor : note.type === 1 ? "#ffffff" : noteColor;
@@ -848,9 +840,10 @@ function drawEditorObjects(
       context.lineWidth = Math.max(1, 6 * viewportScale);
       const holdInfo = note.otherInformations;
       if (note.type === 2 && holdInfo && holdInfo.length >= 1) {
-        const tailCanvas = Math.trunc(holdInfo[1] ?? noteCanvas);
-        const tailY = editorChartY(tickToSeconds(holdInfo[0]), seconds, tailCanvas, viewportScale);
-        const tail = editorCanvasTransform({ x: headRaw.x, y: tailY }, noteCanvas, seconds, viewportScale);
+        const tail = {
+          x: head.x,
+          y: getEditTimeY(tickToSeconds(holdInfo[0]), seconds, DESIGN_HEIGHT * viewportScale),
+        };
         const dx = tail.x - head.x;
         const dy = tail.y - head.y;
         const holdLength = Math.hypot(dx, dy);
@@ -1081,7 +1074,7 @@ function drawJudgeRings(context: CanvasRenderingContext2D, line: Line, currentSe
   context.stroke();
 }
 
-function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, noteColor: string, editing = false): void {
+function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, noteColor: string): void {
   if (note.type !== 2 && seconds > tickToSeconds(note.time)) return;
   const geometry = noteRawGeometry(line, note, seconds, viewportScale, cameraScale, cameraX);
   if (!geometry) return;
@@ -1097,7 +1090,7 @@ function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, sec
     const tailCanvasIndex = Math.trunc(note.otherInformations[1]);
     const tailCanvas = canvasPosition(seconds, tailCanvasIndex);
     const ringY = renderMetrics(viewportScale).ringY;
-    const headRaw = !editing && seconds > tickToSeconds(note.time)
+    const headRaw = seconds > tickToSeconds(note.time)
       ? { x: rawPositionOnCurrentLine(line, seconds, viewportScale, cameraScale, cameraX).x, y: ringY }
       : rawPosition;
     const head = canvasTransformPoint(headRaw, seconds, noteCanvas, viewportScale, cameraScale, cameraX);
@@ -1384,15 +1377,7 @@ export function drawChart(): void {
   const editing = isEditMode();
   if (!state.transition || editing) {
     drawThemeBackground(context, activeTheme, center.width, center.height);
-    drawScene(
-      context,
-      currentSeconds,
-      scale,
-      editing ? 1 : cameraScale,
-      editing ? 0 : cameraX,
-      activeTheme,
-      editing,
-    );
+    if (!editing) drawScene(context, currentSeconds, scale, cameraScale, cameraX, activeTheme);
   }
 
   if (!editing && state.transition && chart.challengeTimes) {
@@ -1429,7 +1414,7 @@ export function drawChart(): void {
     themeColor(activeTheme, 2, { r: 255, g: 255, b: 255, a: 255 }),
     activeTheme > 0,
   );
-  drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
+  if (!editing) drawCanvasIndexes(context, currentSeconds, scale, cameraScale, cameraX);
   drawCombo(context, scale);
   drawFps(context, scale);
   drawSideMasks(context, bounds.width, bounds.height - center.y, center.width);

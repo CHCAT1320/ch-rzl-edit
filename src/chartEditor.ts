@@ -1057,36 +1057,19 @@ function toChartPoint(clientX: number, clientY: number): { x: number; time: numb
   return toCanvasChartPoint(clientX, clientY, editingCanvasIndex());
 }
 
-function toCanvasChartPoint(clientX: number, clientY: number, canvasIndex: number): { x: number; time: number } {
+function toCanvasChartPoint(clientX: number, clientY: number, _canvasIndex: number): { x: number; time: number } {
   const canvas = editorCanvas;
   if (!canvas) return { x: 0, time: currentTime() };
   const rect = canvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
-  const move = chart?.canvasMoves[canvasIndex];
   const width = playfield.width;
   const height = playfield.height;
   const ringY = height * 0.74;
-  const canvasX = move ? editorKeyPointValue(move.xPositionKeyPoints, current) : 0;
-  const canvasY = move ? editorKeyPointValue(move.yPositionKeyPoints, current) : 0;
-  const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, current) * Math.PI / 180 : 0;
-  let localX = clientX - rect.left - rect.width / 2 - getEditorXOffset() * width;
-  let localY = clientY - rect.top - playfield.y;
-  if (move) {
-    const canvasOffsetY = canvasY * width;
-    const pivotX = canvasX * width;
-    const dx = localX - pivotX;
-    const dy = localY - canvasOffsetY - ringY;
-    const cos = Math.cos(-canvasRotation);
-    const sin = Math.sin(-canvasRotation);
-    localX = pivotX + dx * cos - dy * sin;
-    localY = ringY + dx * sin + dy * cos;
-  }
-  const x = localX / width - canvasX;
-  const floorDelta = (ringY - localY) / (editorSpeedRatio() * height);
-  const targetFloor = editorSpeedFloorAt(current, canvasIndex) + floorDelta;
-  const seconds = editorSecondsAtFloor(targetFloor, canvasIndex, current);
-  return { x: snapX(x), time: snapTime(seconds) };
+  const localX = clientX - rect.left - rect.width / 2 - getEditorXOffset() * width;
+  const localY = clientY - rect.top - playfield.y;
+  const seconds = current + (ringY - localY) / (editorSpeedRatio() * height);
+  return { x: snapX(localX / width), time: snapTime(seconds) };
 }
 
 function rawChartX(clientX: number): number {
@@ -1160,18 +1143,10 @@ function nearestLine(clientX: number, clientY: number, threshold = 14): Line | n
   const current = currentTime();
   const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
   const designHeight = 1280 * viewportScale;
-  const screen = (x: number, tick: number, index: number): { x: number; y: number } => {
-    const local = editorCanvasTransform(
-      {
-        x: (x + getEditorXOffset()) * playfield.width,
-        y: getEditTimeY(beatTickToSeconds(tick), current, designHeight),
-      },
-      index,
-      current,
-      viewportScale,
-    );
-    return { x: rect.left + rect.width / 2 + local.x, y: rect.top + playfield.y + local.y };
-  };
+  const screen = (x: number, tick: number, _index: number): { x: number; y: number } => ({
+    x: rect.left + rect.width / 2 + (x + getEditorXOffset()) * playfield.width,
+    y: rect.top + playfield.y + getEditTimeY(beatTickToSeconds(tick), current, designHeight),
+  });
   let best: Line | null = null;
   let distance = Infinity;
   for (const line of chart.lines) {
@@ -1210,133 +1185,21 @@ function lineXAtTime(line: Line, time: number): number | null {
   return start.xPosition + (end.xPosition - start.xPosition) * speedEase(start.easeType, ratio);
 }
 
-function editorKeyPointValue(points: KeyPoint[] | undefined, seconds: number, fallback = 0): number {
-  if (!points || points.length === 0) return fallback;
-  const tick = secondsToTick(seconds);
-  if (points.length === 1 || tick <= points[0].time) return tick < points[0].time ? fallback : points[0].value;
-  for (let index = 1; index < points.length; index += 1) {
-    const start = points[index - 1];
-    const end = points[index];
-    if (tick <= end.time) {
-      const ratio = (tick - start.time) / (end.time - start.time || 1);
-      return start.value + (end.value - start.value) * speedEase(start.easeType, ratio);
-    }
-  }
-  return points[points.length - 1].value;
-}
-
 function editorSpeedRatio(): number {
   const value = Number(document.querySelector<HTMLInputElement>("#chartSpeed")?.value);
   const speed = Number.isFinite(value) ? Math.max(0, value) : 7;
   return (215 / 32 + speed) * (10 / 129);
 }
 
-type EditorSpeedSample = { seconds: number; floor: number; value: number };
-
-function editorSpeedSamples(canvasIndex: number): EditorSpeedSample[] {
-  const points = [...(chart?.canvasMoves[canvasIndex]?.speedKeyPoints ?? [])]
-    .sort((left, right) => left.time - right.time);
-  if (points.length === 0) return [];
-
-  const samples: EditorSpeedSample[] = [];
-  let floor = 0;
-  let previousSeconds = 0;
-  points.forEach((point, index) => {
-    const seconds = beatTickToSeconds(point.time);
-    if (index > 0) {
-      const previous = points[index - 1];
-      floor += (seconds - previousSeconds) * Number(previous.value);
-    }
-    samples.push({ seconds, floor, value: Number(point.value) });
-    previousSeconds = seconds;
-  });
-  return samples;
-}
-
-function editorSpeedFloorAt(seconds: number, canvasIndex: number): number {
-  const samples = editorSpeedSamples(canvasIndex);
-  if (samples.length === 0) return 0;
-  let sample = samples[0];
-  for (const candidate of samples) {
-    if (candidate.seconds <= seconds) sample = candidate;
-    else break;
-  }
-  return sample.floor + (seconds - sample.seconds) * sample.value;
-}
-
-function editorSecondsAtFloor(targetFloor: number, canvasIndex: number, referenceSeconds: number): number {
-  const samples = editorSpeedSamples(canvasIndex);
-  if (samples.length === 0) return targetFloor;
-
-  let best: number | null = null;
-  samples.forEach((sample, index) => {
-    if (!Number.isFinite(sample.value) || sample.value === 0) return;
-    const seconds = sample.seconds + (targetFloor - sample.floor) / sample.value;
-    const end = samples[index + 1]?.seconds ?? Number.POSITIVE_INFINITY;
-    if (seconds < sample.seconds - 1e-6 || seconds > end + 1e-6) return;
-    if (best === null || Math.abs(seconds - referenceSeconds) < Math.abs(best - referenceSeconds)) {
-      best = seconds;
-    }
-  });
-  if (best !== null) return best;
-
-  let current = samples[0];
-  for (const candidate of samples) {
-    if (candidate.seconds <= referenceSeconds) current = candidate;
-    else break;
-  }
-  return current.value === 0
-    ? referenceSeconds
-    : referenceSeconds + (targetFloor - editorSpeedFloorAt(referenceSeconds, canvasIndex)) / current.value;
-}
-
-export function editorChartY(targetSeconds: number, currentSeconds: number, canvasIndex: number, viewportScale: number): number {
-  const height = 1280 * viewportScale;
-  const ringY = height * 0.74;
-  const floorDelta = editorSpeedFloorAt(targetSeconds, canvasIndex) - editorSpeedFloorAt(currentSeconds, canvasIndex);
-  return ringY - floorDelta * editorSpeedRatio() * height;
-}
-
-export function editorCanvasTransform(position: { x: number; y: number }, canvasIndex: number, seconds: number, viewportScale: number): { x: number; y: number } {
-  const move = chart?.canvasMoves[canvasIndex];
-  const width = 720 * viewportScale;
-  const height = 1280 * viewportScale;
-  const ringY = height * 0.74;
-  const canvasX = move ? editorKeyPointValue(move.xPositionKeyPoints, seconds) : 0;
-  const canvasY = move ? editorKeyPointValue(move.yPositionKeyPoints, seconds) : 0;
-  const canvasRotation = move ? editorKeyPointValue(move.rotationKeyPoints, seconds) * Math.PI / 180 : 0;
-  const baseX = position.x / width - getEditorXOffset();
-  let x = (baseX + canvasX) * width;
-  let y = position.y;
-  const canvasOffsetY = canvasY * width;
-  if (canvasRotation !== 0 || canvasOffsetY !== 0) {
-    const pivotX = canvasX * width;
-    const dx = x - pivotX;
-    const dy = y - ringY;
-    const cos = Math.cos(canvasRotation);
-    const sin = Math.sin(canvasRotation);
-    x = pivotX + dx * cos - dy * sin;
-    y = ringY + dx * sin + dy * cos + canvasOffsetY;
-  }
-  return { x: x + getEditorXOffset() * width, y };
-}
-
-function editorScreenPosition(x: number, time: number, canvasIndex?: number): { x: number; y: number } | null {
+function editorScreenPosition(x: number, time: number, _canvasIndex?: number): { x: number; y: number } | null {
   if (!editorCanvas) return null;
   const rect = editorCanvas.getBoundingClientRect();
   const playfield = calculateCenterSize(rect.width, rect.height);
   const current = currentTime();
   const viewportScale = Math.min(playfield.width / 720, playfield.height / 1280);
-  const local = {
-    x: (x + getEditorXOffset()) * playfield.width,
-    y: canvasIndex === undefined
-      ? getEditTimeY(beatTickToSeconds(time), current, 1280 * viewportScale)
-      : editorChartY(beatTickToSeconds(time), current, canvasIndex, viewportScale),
-  };
-  const transformed = canvasIndex === undefined ? local : editorCanvasTransform(local, canvasIndex, current, viewportScale);
   return {
-    x: rect.left + rect.width / 2 + transformed.x,
-    y: rect.top + playfield.y + transformed.y,
+    x: rect.left + rect.width / 2 + (x + getEditorXOffset()) * playfield.width,
+    y: rect.top + playfield.y + getEditTimeY(beatTickToSeconds(time), current, 1280 * viewportScale),
   };
 }
 
