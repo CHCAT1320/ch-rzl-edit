@@ -1,6 +1,6 @@
 import { calculateCenterSize, MONO_FONT_STACK } from "./canvas";
 import { editorCanvasTransform, getEditorVisualState } from "./chartEditor";
-import { drawEditOverlay, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
+import { drawEditOverlay, getEditingCanvasIndex, getEditTimeY, getEditorXOffset, isEditMode } from "./editMode";
 import { playHitSound } from "./hitSound";
 import { getPlaybackSeconds } from "./playback";
 
@@ -679,16 +679,17 @@ function drawScene(
   cameraScale: number,
   cameraX: number,
   themeIndex: number,
+  skipCanvas: number | null = null,
 ): void {
   const noteColor = color(themeColor(themeIndex, 1, { r: 255, g: 255, b: 255, a: 255 }));
   context.save();
   applyCameraTransform(context, currentSeconds, viewportScale, cameraScale);
   for (const line of chart?.lines ?? []) {
-    drawLine(context, line, currentSeconds, viewportScale, cameraScale, cameraX);
+    drawLine(context, line, currentSeconds, viewportScale, cameraScale, cameraX, skipCanvas);
   }
   for (const line of chart?.lines ?? []) {
     for (const note of line.notes) {
-      drawNote(context, line, note, currentSeconds, viewportScale, cameraScale, cameraX, noteColor);
+      drawNote(context, line, note, currentSeconds, viewportScale, cameraScale, cameraX, noteColor, skipCanvas);
     }
   }
   context.restore();
@@ -1023,8 +1024,9 @@ function drawStageEdges(
   context.fillRect(right, start, barWidth, length);
 }
 
-function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number): void {
+function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, skipCanvas: number | null = null): void {
   if (line.linePoints.length === 0) return;
+  if (skipCanvas !== null && line.linePoints.length === 1 && line.linePoints[0].canvasIndex === skipCanvas) return;
   const lineColor = currentColor(seconds, line.lineColor);
   const pointColors = line.linePoints.map((point) => mixColor(point.color, lineColor));
   context.lineWidth = Math.max(1, 6 * viewportScale);
@@ -1039,6 +1041,9 @@ function drawLine(context: CanvasRenderingContext2D, line: Line, seconds: number
   for (let index = 0; index < line.linePoints.length - 1; index += 1) {
     const start = line.linePoints[index];
     const end = line.linePoints[index + 1];
+    // The editing layer draws this canvas' segments again on top; drawing them
+    // here too would double the anti-aliased edges and make them look fuzzy.
+    if (skipCanvas !== null && (start.canvasIndex === skipCanvas || end.canvasIndex === skipCanvas)) continue;
     const p0 = pointPosition(start, seconds, viewportScale, cameraScale, cameraX);
     const p1 = pointPosition(end, seconds, viewportScale, cameraScale, cameraX);
     if (!segmentIntersectsScreen(
@@ -1117,12 +1122,18 @@ function drawJudgeRings(context: CanvasRenderingContext2D, line: Line, currentSe
   context.stroke();
 }
 
-function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, noteColor: string): void {
+function drawNote(context: CanvasRenderingContext2D, line: Line, note: Note, seconds: number, viewportScale: number, cameraScale: number, cameraX: number, noteColor: string, skipCanvas: number | null = null): void {
   if (note.type !== 2 && seconds > tickToSeconds(note.time)) return;
   const geometry = noteRawGeometry(line, note, seconds, viewportScale, cameraScale, cameraX);
   if (!geometry) return;
   const rawPosition = geometry.raw;
   const noteCanvas = geometry.canvasIndex;
+  if (skipCanvas !== null) {
+    // The editing layer already draws this canvas' notes; drawing them again
+    // here would double the anti-aliased outline and blur the edges.
+    const tailCanvas = note.type === 2 ? Math.trunc(note.otherInformations?.[1] ?? noteCanvas) : noteCanvas;
+    if (noteCanvas === skipCanvas || tailCanvas === skipCanvas) return;
+  }
   const position = canvasTransformPoint(rawPosition, seconds, noteCanvas, viewportScale, cameraScale, cameraX);
   const cullPosition = cameraTransformPoint(position, seconds, viewportScale, cameraScale);
   if (note.type !== 2 && (cullPosition.x < -renderSurfaceWidth / 2 - 60 || cullPosition.x > renderSurfaceWidth / 2 + 60 || cullPosition.y < -60 || cullPosition.y > renderSurfaceHeight + 60)) return;
@@ -1390,6 +1401,7 @@ export function drawChart(): void {
   context.clearRect(0, 0, bounds.width, bounds.height);
   context.translate(centerX, center.y);
   const activeTheme = state.active > 0 ? state.active : 0;
+  const editingCanvas = isEditMode() ? getEditingCanvasIndex() : null;
   const transitionIndex = state.transition ? chart.challengeTimes?.indexOf(state.transition) ?? -1 : -1;
   drawStageBackground(
     context,
@@ -1400,7 +1412,7 @@ export function drawChart(): void {
   );
   if (!state.transition) {
     drawThemeBackground(context, activeTheme, center.width, center.height);
-    drawScene(context, currentSeconds, scale, cameraScale, cameraX, activeTheme);
+    drawScene(context, currentSeconds, scale, cameraScale, cameraX, activeTheme, editingCanvas);
   }
 
   if (state.transition && chart.challengeTimes) {
@@ -1412,7 +1424,7 @@ export function drawChart(): void {
     context.rect(-center.width, 0, center.width * 2, center.height);
     context.clip();
     drawThemeBackground(context, baseThemeIndex, center.width, center.height);
-    drawScene(context, currentSeconds, scale, cameraScale, cameraX, baseThemeIndex);
+    drawScene(context, currentSeconds, scale, cameraScale, cameraX, baseThemeIndex, editingCanvas);
     context.restore();
     context.save();
     context.beginPath();
@@ -1420,7 +1432,7 @@ export function drawChart(): void {
     context.arc(0, transitionY, 15 * state.progress * center.height, 0, Math.PI * 2);
     context.clip();
     drawThemeBackground(context, challengeIndex, center.width, center.height);
-    drawScene(context, currentSeconds, scale, cameraScale, cameraX, challengeIndex);
+    drawScene(context, currentSeconds, scale, cameraScale, cameraX, challengeIndex, editingCanvas);
     context.restore();
   }
   for (const line of chart.lines) {
